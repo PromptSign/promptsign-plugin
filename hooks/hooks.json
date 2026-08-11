@@ -1,0 +1,28 @@
+{
+  "description": "Two enforcement points, per DESIGN.md 4.1. SessionStart verifies every skill, agent definition and CLAUDE.md/AGENTS.md under the project and ~/.claude, reporting failures into session context. PreToolUse(Skill) re-verifies the skill bundle at invocation time and blocks execution on a signature failure. Fail-open by default (the ecosystem is mostly unsigned); PROMPTSIGN_STRICT=1 makes both fail closed.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

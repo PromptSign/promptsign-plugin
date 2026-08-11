@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "promptsign",
+  "description": "Signing and verification for AI instruction files.",
+  "owner": {
+    "name": "Sergey Vasilevskiy",
+    "url": "https://promptsign.ai"
+  },
+  "plugins": [
+    {
+      "name": "promptsign",
+      "source": "./",
+      "category": "security",
+      "description": "Verify signatures on CLAUDE.md, skills, and agent definitions before Claude Code loads them.",
+      "homepage": "https://promptsign.ai/integrate"
+    }
+  ]
+}

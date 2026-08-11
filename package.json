@@ -1,0 +1,20 @@
+{
+  "name": "promptsign-plugin",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Claude Code plugin: signature verification for AI instruction files. Not published to npm. This manifest exists so /promptsign:setup can install a pinned verifier into the plugin directory.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@promptsign/verify": "0.3.0"
+  },
+  "scripts": {
+    "status": "node scripts/setup.mjs",
+    "setup": "node scripts/setup.mjs --install",
+    "test": "node --test test/hook.test.mjs",
+    "validate": "claude plugin validate . --strict && claude plugin validate ./.claude-plugin/plugin.json --strict"
+  }
+}

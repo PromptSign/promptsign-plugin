@@ -1,0 +1,13 @@
+{
+  "name": "promptsign",
+  "version": "0.3.0",
+  "description": "Verifies signatures on the instruction files Claude Code loads, meaning CLAUDE.md, skills, and agent definitions, before they reach model context. It re-checks a skill bundle before the Skill tool runs it. Sigstore keyless, offline verification against a pinned trust root, no telemetry.",
+  "author": {
+    "name": "Sergey Vasilevskiy",
+    "url": "https://promptsign.ai"
+  },
+  "homepage": "https://promptsign.ai/integrate",
+  "repository": "https://github.com/PromptSign/promptsign-plugin",
+  "license": "Apache-2.0",
+  "keywords": ["security", "supply-chain", "sigstore", "signing", "verification"]
+}

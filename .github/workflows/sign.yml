@@ -1,0 +1,87 @@
+# Dogfooding: this plugin ships signed, using our own actions to do it.
+#
+# "Sign your releases" from an unsigned publisher is the first objection anyone
+# raises, and it is a fair one. Every push to main re-signs the plugin directory
+# and commits the resulting bundle, so the tree a user clones always carries a
+# signature made by this workflow's own identity. There is no key anywhere.
+#
+# The manifest skips .promptsign/, .git/ and node_modules/, so committing the
+# bundle back does not invalidate it.
+#
+# Our own actions are pinned by commit SHA rather than by tag. A tag can be
+# moved and a SHA cannot, and this workflow is exactly the case the
+# promptsign-sign README says to use a SHA for.
+
+name: sign
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Drift check: catches a push to main that never got re-signed, and a trust
+    # root or CLI change that breaks verification of what is already published.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write # commit the refreshed bundle
+  id-token: write # mint the Sigstore OIDC token (keyless signing)
+
+jobs:
+  sign:
+    if: github.event_name != 'schedule' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The signed manifest records the plugin's own version, so a consumer can
+      # tell which release a copy of these files came from, rather than only
+      # that it came from us. plugin.json is the single source of that number.
+      - id: meta
+        run: echo "version=$(node -p "require('./.claude-plugin/plugin.json').version")" >> "$GITHUB_OUTPUT"
+
+      - id: sign
+        uses: PromptSign/promptsign-sign@cc4e6dd8c49e6ba1e3dee15a26001d4806323d8f # v1.0.0
+        with:
+          path: .
+          name: promptsign
+          kind: plugin
+          version: ${{ steps.meta.outputs.version }}
+
+      # Stage before comparing. On the first run the bundle is untracked, and
+      # `git diff` reports an untracked file as unchanged, so the plain form
+      # would skip the commit forever and no published copy would carry a
+      # signature.
+      - name: commit the bundle
+        run: |
+          set -euo pipefail
+          git add .promptsign/bundle.json
+          if git diff --cached --quiet -- .promptsign/bundle.json; then
+            echo "bundle unchanged"; exit 0
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'sign: refresh bundle for ${{ github.sha }}'
+          git push
+
+      # The signing action verifies its own output, but without pinning who
+      # signed. This checks that the identity is the one we tell users to
+      # expect, the string in the README, against the tree as committed.
+      - uses: PromptSign/promptsign-verify@ebbc7d69011428db1198cc96b2e1f023bacce181 # v1.0.0
+        with:
+          path: .
+          identity: https://github.com/PromptSign/promptsign-plugin/.github/workflows/sign.yml@refs/heads/main
+
+  # Scheduled arm: verify what is published without signing anything. Needs no
+  # id-token and no write access, which is the point of splitting it out.
+  drift:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PromptSign/promptsign-verify@ebbc7d69011428db1198cc96b2e1f023bacce181 # v1.0.0
+        with:
+          path: .
+          identity: https://github.com/PromptSign/promptsign-plugin/.github/workflows/sign.yml@refs/heads/main

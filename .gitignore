@@ -1,0 +1,11 @@
+# Installed by /promptsign:setup on machines without the CLI. Never committed —
+# the verifier is fetched from npm, not vendored (and manifest.rs skips
+# node_modules, so its presence cannot affect this plugin's own signature).
+/node_modules/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
