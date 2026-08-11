@@ -62,6 +62,11 @@ before(() => {
     path.join(tmp, 'skills', 'demo', 'SKILL.md'),
     '---\nname: demo\ndescription: fixture\n---\n\nbody\n',
   );
+  // sessionStart()'s roots list falls back to os.homedir()/.claude when tmp has
+  // nothing to verify, so without this fixture the SessionStart tests below
+  // only pass by accident, on whatever machine happens to have a real
+  // ~/.claude directory to fall through to.
+  fs.writeFileSync(path.join(tmp, 'CLAUDE.md'), '# fixture\n');
 
   if (!fs.existsSync(STUB_DIR)) {
     fs.mkdirSync(STUB_DIR, { recursive: true });
