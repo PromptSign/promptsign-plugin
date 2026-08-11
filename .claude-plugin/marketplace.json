@@ -12,7 +12,7 @@
       "source": "./",
       "category": "security",
       "description": "Verify signatures on CLAUDE.md, skills, and agent definitions before Claude Code loads them.",
-      "homepage": "https://promptsign.ai/integrate"
+      "homepage": "https://promptsign.ai/integrate?c=plugin-listing"
     }
   ]
 }

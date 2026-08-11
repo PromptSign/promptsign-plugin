@@ -6,7 +6,7 @@
     "name": "Sergey Vasilevskiy",
     "url": "https://promptsign.ai"
   },
-  "homepage": "https://promptsign.ai/integrate",
+  "homepage": "https://promptsign.ai/integrate?c=plugin-listing",
   "repository": "https://github.com/PromptSign/promptsign-plugin",
   "license": "Apache-2.0",
   "keywords": ["security", "supply-chain", "sigstore", "signing", "verification"]
