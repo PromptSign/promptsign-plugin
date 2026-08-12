@@ -1,12 +1,19 @@
 # Dogfooding: this plugin ships signed, using our own actions to do it.
 #
 # "Sign your releases" from an unsigned publisher is the first objection anyone
-# raises, and it is a fair one. Every push to main re-signs the plugin directory
-# and commits the resulting bundle, so the tree a user clones always carries a
+# raises, and it is a fair one. Pushing a release tag (as `claude plugin tag .
+# --push` does) re-signs the plugin directory at that commit and commits the
+# resulting bundle back to main, so the tree a user clones always carries a
 # signature made by this workflow's own identity. There is no key anywhere.
 #
+# Deliberately not triggered on every push to main: that made every ordinary
+# push get a bot commit added on top, leaving a contributor's local main one
+# commit behind origin after every single push. Signing only on the tag a
+# release actually ships under confines that to once per release.
+#
 # The manifest skips .promptsign/, .git/ and node_modules/, so committing the
-# bundle back does not invalidate it.
+# bundle back does not invalidate it, which is what lets the bundle-commit step
+# land after the tag rather than before it.
 #
 # Our own actions are pinned by commit SHA rather than by tag. A tag can be
 # moved and a SHA cannot, and this workflow is exactly the case the
@@ -16,10 +23,10 @@ name: sign
 
 on:
   push:
-    branches: [main]
+    tags: ['promptsign--v*']
   schedule:
-    # Drift check: catches a push to main that never got re-signed, and a trust
-    # root or CLI change that breaks verification of what is already published.
+    # Drift check: catches a trust root or CLI change that breaks verification
+    # of an already-published release, independent of when the last one shipped.
     - cron: '17 6 * * 1'
   workflow_dispatch:
 
@@ -52,6 +59,12 @@ jobs:
       # `git diff` reports an untracked file as unchanged, so the plain form
       # would skip the commit forever and no published copy would carry a
       # signature.
+      #
+      # Checkout leaves HEAD detached at the tag, not on a branch, since this
+      # runs from a tag push. `push origin HEAD:main` targets main explicitly
+      # rather than relying on an upstream that detached HEAD doesn't have, and
+      # only succeeds as a fast-forward, so it fails loudly instead of
+      # clobbering history if main moved after the tag was cut.
       - name: commit the bundle
         run: |
           set -euo pipefail
@@ -61,16 +74,17 @@ jobs:
           fi
           git config user.name  'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'sign: refresh bundle for ${{ github.sha }}'
-          git push
+          git commit -m 'sign: refresh bundle for ${{ github.ref_name }}'
+          git push origin HEAD:main
 
       # The signing action verifies its own output, but without pinning who
       # signed. This checks that the identity is the one we tell users to
-      # expect, the string in the README, against the tree as committed.
+      # expect, the string in the README, against the tree as committed. A
+      # glob because the ref, and so the identity, differs per release tag.
       - uses: PromptSign/promptsign-verify@ebbc7d69011428db1198cc96b2e1f023bacce181 # v1.0.0
         with:
           path: .
-          identity: https://github.com/PromptSign/promptsign-plugin/.github/workflows/sign.yml@refs/heads/main
+          identity: https://github.com/PromptSign/promptsign-plugin/.github/workflows/sign.yml@refs/tags/promptsign--v*
 
   # Scheduled arm: verify what is published without signing anything. Needs no
   # id-token and no write access, which is the point of splitting it out.
@@ -84,4 +98,4 @@ jobs:
       - uses: PromptSign/promptsign-verify@ebbc7d69011428db1198cc96b2e1f023bacce181 # v1.0.0
         with:
           path: .
-          identity: https://github.com/PromptSign/promptsign-plugin/.github/workflows/sign.yml@refs/heads/main
+          identity: https://github.com/PromptSign/promptsign-plugin/.github/workflows/sign.yml@refs/tags/promptsign--v*

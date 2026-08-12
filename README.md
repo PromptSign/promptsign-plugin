@@ -94,7 +94,7 @@ and set `PROMPTSIGN_STRICT=1` with a managed `policy.json`.
 ## This plugin is itself signed
 
 `.promptsign/bundle.json` is produced by [`.github/workflows/sign.yml`](.github/workflows/sign.yml)
-on every push, signed by that workflow's own identity. Check your copy:
+on every release tag, signed by that workflow's own identity. Check your copy:
 
 ```bash
 promptsign verify /path/to/promptsign-plugin
