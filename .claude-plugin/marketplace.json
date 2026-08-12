@@ -4,6 +4,7 @@
   "description": "Signing and verification for AI instruction files.",
   "owner": {
     "name": "Sergey Vasilevskiy",
+    "email": "info@promptsign.ai",
     "url": "https://promptsign.ai"
   },
   "plugins": [
@@ -12,7 +13,15 @@
       "source": "./",
       "category": "security",
       "description": "Verify signatures on CLAUDE.md, skills, and agent definitions before Claude Code loads them.",
-      "homepage": "https://promptsign.ai/integrate?c=plugin-listing"
+      "author": {
+        "name": "Sergey Vasilevskiy",
+        "email": "info@promptsign.ai",
+        "url": "https://promptsign.ai"
+      },
+      "homepage": "https://promptsign.ai/integrate?c=plugin-listing",
+      "repository": "https://github.com/PromptSign/promptsign-plugin",
+      "license": "Apache-2.0",
+      "keywords": ["security", "supply-chain", "sigstore", "signing", "verification"]
     }
   ]
 }

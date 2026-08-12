@@ -16,14 +16,16 @@ pinned in this repo. Nothing phones home, ever.
 /plugin install promptsign@promptsign
 ```
 
-Then, once:
+That's it for most setups: installing from a marketplace also installs
+`@promptsign/verify` automatically, so a verifier is ready as soon as the
+plugin is. Confirm it landed, or install one by hand if it didn't, with:
 
 ```
 /promptsign:setup
 ```
 
-which reports whether a verifier is present and how to get one if not. That step
-is not decoration. See [Runtime](#runtime).
+which reports whether a verifier is present and how to get one if not. See
+[Runtime](#runtime).
 
 ## What it does
 
@@ -47,17 +49,23 @@ directory by hand.
 
 Verification needs the Rust verifier, and this plugin ships neither a binary
 (policy: binaries come from promptsign.ai, not from git) nor a vendored
-`node_modules`, because Claude Code clones a plugin rather than installing it. So
-the hooks resolve a verifier at run time, in this order:
+`node_modules`. So the hooks resolve a verifier at run time, in this order:
 
 1. **The `promptsign` binary** on `PATH`, or at `PROMPTSIGN_BIN`. Its `hook`
    subcommand does all of the above natively in ~8 ms with no Node startup, so
    when it is present the hook script simply hands it the event. Get it from
    <https://promptsign.ai>.
-2. **`@promptsign/verify`** installed into this plugin's own directory by
-   `/promptsign:setup`. It is the same Rust core as a native Node addon.
+2. **`@promptsign/verify`**, the same Rust core as a native Node addon.
+   Installing from a marketplace, Claude Code installs it into this plugin's
+   own `node_modules` automatically, since the repo ships a `package.json` and
+   a lockfile. Run `/promptsign:setup` (no flags) to confirm this landed. If it
+   didn't, most often because you loaded the plugin with `claude --plugin-dir`
+   rather than through a marketplace, or the automatic install failed quietly,
+   `/promptsign:setup --install` installs it by hand.
 3. **Neither.** The plugin says so once at session start and verifies nothing.
-   It does not install anything behind your back.
+   It does not install anything behind your back beyond the automatic step
+   above, which is Claude Code's own plugin-install behavior, not this
+   plugin's.
 
 ## Configuration
 

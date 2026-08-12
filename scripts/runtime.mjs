@@ -6,12 +6,19 @@
 //   Tier 1: the `promptsign` binary. Its `hook` subcommand already implements
 //           every event in-process (~8 ms, no Node runtime involved), so when
 //           a binary is present the hook script just hands stdin to it.
-//   Tier 2: @promptsign/verify, the napi binding around the same Rust core,
-//           installed into this plugin's own node_modules by /promptsign:setup.
+//   Tier 2: @promptsign/verify, the napi binding around the same Rust core.
+//           For a marketplace install, Claude Code installs this into the
+//           plugin's own node_modules automatically, because package.json and
+//           package-lock.json both ship in the repo and neither the package
+//           nor its platform binaries carry an install script for
+//           `--ignore-scripts` to skip. /promptsign:setup --install exists as
+//           the fallback for that automatic step: it's the only path when
+//           developing with `claude --plugin-dir`. It's also a way to recover
+//           when the automatic install silently fails or times out.
 //
-// Neither is vendored: no binaries in git (the CLI ships from promptsign.ai),
-// and Claude Code does not run `npm install` for a plugin, so tier 2 has to be
-// installed deliberately rather than assumed.
+// Neither tier is vendored: there are no binaries in git, the CLI ships from
+// promptsign.ai, and the napi package is installed from npm at plugin-install
+// time rather than committed.
 
 import fs from 'node:fs';
 import path from 'node:path';
