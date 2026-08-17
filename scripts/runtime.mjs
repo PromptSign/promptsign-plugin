@@ -60,10 +60,21 @@ export function binaryName() {
 }
 
 /** Tier 2, or null if it was never installed. Returns the module's public
- *  surface: { verify, verifyTree, verifyKeyless, policyShow, coreVersion }. */
+ *  surface: { verify, verifyTree, verifyKeyless, policyShow, coreVersion }.
+ *
+ *  PROMPTSIGN_NAPI names a module file to load instead of the installed
+ *  package, mirroring what PROMPTSIGN_BIN does for tier 1. The tests use it to
+ *  drive the tier-2 branches from a stub without touching node_modules, so they
+ *  behave the same whether or not a real verifier is installed. Anyone able to
+ *  set it can already point PROMPTSIGN_BIN at a binary that approves
+ *  everything, so it grants no capability the environment did not already have.
+ *  A relative value resolves against the working directory rather than against
+ *  this file. */
 export function loadNapi() {
+  const override = process.env.PROMPTSIGN_NAPI;
+
   try {
-    return require('@promptsign/verify');
+    return require(override ? path.resolve(override) : '@promptsign/verify');
   } catch {
     return null;
   }

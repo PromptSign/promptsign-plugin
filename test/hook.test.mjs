@@ -4,10 +4,11 @@
 // tested here is what only exists in this repo: the runtime tiering, skill
 // resolution, and the fail-open/fail-closed decisions.
 //
-// The tier-2 tests install a stub at node_modules/@promptsign/verify so the
-// napi path is exercised without a published package or a native build. They
-// skip themselves if a real verifier is installed there, rather than
-// overwriting it.
+// The tier-2 tests point PROMPTSIGN_NAPI at a stub module so the napi path is
+// exercised without a published package or a native build. The stub lives in
+// the temp directory rather than in node_modules, so these tests behave the
+// same whether or not a real verifier is installed, and they never modify the
+// working tree.
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -19,11 +20,10 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const HOOK = path.join(ROOT, 'scripts', 'verify.mjs');
-const STUB_DIR = path.join(ROOT, 'node_modules', '@promptsign', 'verify');
 const NO_BINARY = '__promptsign_absent__';
 
 let tmp;
-let stubInstalled = false;
+let stub;
 
 // A stub whose verdict is whatever PROMPTSIGN_TEST_ACTION says, so each test
 // can drive the pass / fail / throw branches.
@@ -50,7 +50,13 @@ function runHook(payload, env = {}) {
   const r = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PLUGIN_ROOT: ROOT, PROMPTSIGN_HOME: tmp, ...env },
+    env: {
+      ...process.env,
+      CLAUDE_PLUGIN_ROOT: ROOT,
+      PROMPTSIGN_HOME: tmp,
+      PROMPTSIGN_NAPI: stub,
+      ...env,
+    },
   });
   return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
@@ -68,19 +74,14 @@ before(() => {
   // ~/.claude directory to fall through to.
   fs.writeFileSync(path.join(tmp, 'CLAUDE.md'), '# fixture\n');
 
-  if (!fs.existsSync(STUB_DIR)) {
-    fs.mkdirSync(STUB_DIR, { recursive: true });
-    fs.writeFileSync(
-      path.join(STUB_DIR, 'package.json'),
-      JSON.stringify({ name: '@promptsign/verify', version: '0.0.0-stub', main: 'index.cjs' }),
-    );
-    fs.writeFileSync(path.join(STUB_DIR, 'index.cjs'), STUB);
-    stubInstalled = true;
-  }
+  stub = path.join(tmp, 'napi-stub.cjs');
+  fs.writeFileSync(stub, STUB);
 });
 
 after(() => {
-  if (stubInstalled) fs.rmSync(path.join(ROOT, 'node_modules'), { recursive: true, force: true });
+  // Only the temp directory, which holds the fixtures and the stub alike. An
+  // earlier version deleted the repository's node_modules, which made a local
+  // test run destroy an install it had not created.
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -254,15 +255,15 @@ describe('SessionStart', () => {
   });
 
   test('says so when no verifier is available at all', () => {
-    // Resolution walks up from scripts/, so the stub has to be out of the way.
-    const parked = `${STUB_DIR}.parked`;
-    fs.renameSync(STUB_DIR, parked);
-    try {
-      const r = runHook({ hook_event_name: 'SessionStart', cwd: tmp }, { PROMPTSIGN_BIN: NO_BINARY });
-      assert.equal(r.status, 0);
-      assert.match(r.stdout, /no verifier available/);
-    } finally {
-      fs.renameSync(parked, STUB_DIR);
-    }
+    // Both tiers have to miss: no binary, and an override that resolves to
+    // nothing. loadNapi() returns null rather than throwing, so the hook takes
+    // its "neither tier is installed" path.
+    const r = runHook(
+      { hook_event_name: 'SessionStart', cwd: tmp },
+      { PROMPTSIGN_BIN: NO_BINARY, PROMPTSIGN_NAPI: path.join(tmp, 'absent.cjs') },
+    );
+
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /no verifier available/);
   });
 });
