@@ -23,7 +23,36 @@ jobs:
 
       # The hooks run on whatever Node the user has; the tests spawn the hook as
       # a subprocess, so this is the same code path a real session takes.
-      - run: node --test test/hook.test.mjs
+      # Nothing is installed here on purpose, which is what a fresh clone and a
+      # `claude --plugin-dir` checkout both look like. The napi suite skips
+      # itself in that state, and the job below is the one that runs it.
+      - run: node --test test/hook.test.mjs test/napi.test.mjs
+
+  # The suite above drives tier 2 through a stub, so on its own it never loads
+  # the addon that actually ships. This job installs the real @promptsign/verify
+  # and runs the hook against it, which is what catches a core release that
+  # breaks the binding before a user does.
+  napi:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - run: npm install
+
+      # Fails rather than skips if the install did not produce a usable addon,
+      # because a silent skip here would hide exactly the breakage this job
+      # exists to catch.
+      - name: the addon must be loadable
+        run: node -e "const v=require('@promptsign/verify'); console.log('core', v.coreVersion())"
+
+      - run: node --test test/hook.test.mjs test/napi.test.mjs
 
   manifests:
     runs-on: ubuntu-latest

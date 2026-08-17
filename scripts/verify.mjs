@@ -17,6 +17,8 @@
 //   PROMPTSIGN_STRICT=1     fail closed: unresolvable skills are blocked, and
 //                           SessionStart failures end the session with exit 2.
 //   PROMPTSIGN_BIN          explicit path to the promptsign binary.
+//   PROMPTSIGN_NAPI         explicit path to a tier-2 module, in place of the
+//                           installed @promptsign/verify. Used by the tests.
 //   PROMPTSIGN_SKILL_ROOTS  extra skill roots, path-delimiter separated.
 //   PROMPTSIGN_TRUST_DIR    trust root other than the one pinned in trust/.
 //   PROMPTSIGN_POLICY       explicit trust policy path (spec/04-policy.md).
