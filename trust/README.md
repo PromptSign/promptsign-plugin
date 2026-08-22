@@ -52,8 +52,8 @@ here.** Rotation is append, never replace: `fulcio.pem` holds a chain of CA
 certificates and `rekor.pub` holds one PEM block per trusted log, and each is
 selected by identity rather than position. Keeping the retired material is what
 lets everything signed before the rotation carry on verifying. Copying over
-these files, or editing them in place, is how that material gets dropped —
-which silently invalidates the entire back catalogue.
+these files, or editing them in place, is how that material gets dropped. That
+silently invalidates the entire back catalogue.
 
 So: land the rotation in promptsign-core first, following the procedure in
 [its `trust/README.md`](https://github.com/PromptSign/promptsign-core/blob/main/trust/README.md).
