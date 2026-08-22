@@ -1,0 +1,47 @@
+# Keep this plugin's pinned trust root in step with promptsign-core, which owns
+# the canonical copy.
+#
+# Two different failures are being watched for, which is why this runs on both
+# events rather than one:
+#
+#   on push/PR   catches a change made *here* — someone editing trust/ in place
+#                instead of rotating in core.
+#   on schedule  catches a change made *there* — a rotation landing in core that
+#                no commit in this repo would otherwise notice. Without this, a
+#                quiet week means the plugin silently falls behind the root it
+#                is supposed to track.
+#
+# Kept out of ci.yml deliberately: this is the only job here that touches the
+# network, and it is the only one that needs a schedule. Folding it in would
+# either drag the whole test matrix into a weekly run or leave the scheduled
+# half unbuilt.
+name: trust root
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, Monday morning UTC. Off the hour: GitHub queues scheduled runs at
+    # :00 and drops them under load.
+    - cron: '17 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: in step with promptsign-core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # Exit 1 means core was unreachable and nothing was compared; exit 2 means
+      # the roots genuinely differ. The script's output says which, because the
+      # two call for opposite reactions: re-run the job, or stop and rotate.
+      - run: node scripts/check-trust-root.mjs
