@@ -235,6 +235,93 @@ describe('plugin-provided skills', () => {
   });
 });
 
+describe('installed plugin skills', () => {
+  // A plugin skill runs from its install path under plugins/cache/, which
+  // installed_plugins.json records exactly. The marketplace checkout beside it
+  // is a separate copy that moves on its own, so verifying that one would
+  // verify bytes other than the ones about to run. A plugin installed without
+  // any checkout, which is common, would not resolve at all.
+  function makeSkill(dir) {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'SKILL.md'),
+      '---\nname: mktdemo\ndescription: fixture\n---\n\nbody\n',
+    );
+    return dir;
+  }
+
+  function withHome(run) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'promptsign-home-'));
+    try {
+      run(home, { HOME: home, USERPROFILE: home });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  const installDir = (home) =>
+    path.join(home, '.claude', 'plugins', 'cache', 'demo', 'demo', '1.0.0');
+  const checkoutDir = (home) =>
+    path.join(home, '.claude', 'plugins', 'marketplaces', 'demo', 'skills', 'mktdemo');
+
+  function writeManifest(home, body) {
+    const dir = path.join(home, '.claude', 'plugins');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'installed_plugins.json'), body);
+  }
+
+  const call = (skill, env) =>
+    runHook(
+      { hook_event_name: 'PreToolUse', tool_name: 'Skill', tool_input: { skill }, cwd: tmp },
+      { PROMPTSIGN_BIN: NO_BINARY, PROMPTSIGN_TEST_ACTION: 'fail', ...env },
+    );
+
+  test('resolves a plugin that has no marketplace checkout', () => {
+    withHome((home, env) => {
+      const install = installDir(home);
+      makeSkill(path.join(install, 'skills', 'mktdemo'));
+      writeManifest(
+        home,
+        JSON.stringify({ plugins: { 'demo@demo-market': [{ installPath: install }] } }),
+      );
+
+      const r = call('demo:mktdemo', env);
+      assert.equal(r.status, 2, 'an installed plugin skill must be verified like any other');
+      assert.ok(r.stderr.includes(install), r.stderr);
+    });
+  });
+
+  test('verifies the installed copy, not the marketplace checkout', () => {
+    withHome((home, env) => {
+      const install = installDir(home);
+      const checkout = checkoutDir(home);
+      makeSkill(path.join(install, 'skills', 'mktdemo'));
+      makeSkill(checkout);
+      writeManifest(
+        home,
+        JSON.stringify({ plugins: { 'demo@demo-market': [{ installPath: install }] } }),
+      );
+
+      const r = call('demo:mktdemo', env);
+      assert.equal(r.status, 2);
+      assert.ok(r.stderr.includes(install), r.stderr);
+      assert.ok(!r.stderr.includes(checkout), 'the checkout is not the copy that runs');
+    });
+  });
+
+  test('falls back to the marketplace checkout when the manifest is unreadable', () => {
+    withHome((home, env) => {
+      const checkout = checkoutDir(home);
+      makeSkill(checkout);
+      writeManifest(home, '{not json');
+
+      const r = call('demo:mktdemo', env);
+      assert.equal(r.status, 2);
+      assert.ok(r.stderr.includes(checkout), r.stderr);
+    });
+  });
+});
+
 describe('SessionStart', () => {
   test('reports failures into context without blocking', () => {
     const r = runHook(

@@ -143,14 +143,58 @@ function subdirs(dir) {
 // both. Third-party plugins live under external_plugins.
 const PLUGIN_CONTAINERS = ['plugins', 'external_plugins'];
 
-// Skills that arrive through a Claude Code plugin live under the marketplace
-// checkout, not under any skills/ root. They are either under
-// <marketplace>/skills/<name> for a plugin published from its repo root, or
-// <marketplace>/<container>/<plugin>/skills/<name> for a monorepo. These paths
-// are searched only after the plain roots miss and only one level deep, so a
-// miss stays cheap.
+function pluginsDir() {
+  return path.join(os.homedir(), '.claude', 'plugins');
+}
+
+// Claude Code records every plugin install in installed_plugins.json, keyed
+// "<plugin>@<marketplace>", each entry carrying the exact installPath under
+// plugins/cache/. That file is the only authority on which copy is live:
+// several versions of one plugin can sit in the cache side by side, and the
+// marketplace checkout beside them is a separate copy that moves on its own.
+function installedPlugins() {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(path.join(pluginsDir(), 'installed_plugins.json'), 'utf8'));
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const [key, entries] of Object.entries(parsed?.plugins ?? {})) {
+    const plugin = key.split('@')[0];
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      if (entry?.installPath) out.push([plugin, entry.installPath]);
+    }
+  }
+  return out;
+}
+
+// A plugin skill runs from its install path, so that is the copy that has to be
+// verified. A namespaced name carries the owning plugin, so that plugin's
+// install is tried before the others.
+function installedSkillDir(skillName, candidates) {
+  const cut = skillName.lastIndexOf(':');
+  const namespace = cut === -1 ? null : skillName.slice(0, cut);
+  const installs = installedPlugins().sort(
+    (a, b) => (a[0] === namespace ? 0 : 1) - (b[0] === namespace ? 0 : 1),
+  );
+
+  for (const [, install] of installs) {
+    for (const name of candidates) {
+      const dir = path.join(install, 'skills', name);
+      if (isSkillDir(dir)) return dir;
+    }
+  }
+  return null;
+}
+
+// Fallback for a machine whose installed_plugins.json is missing or does not
+// list the skill: the marketplace checkout. A plugin published from its repo
+// root sits at <marketplace>/skills/<name>, a monorepo one at
+// <marketplace>/<container>/<plugin>/skills/<name>. These paths are searched
+// only one level deep, so a miss stays cheap.
 function pluginSkillDir(name) {
-  const marketplaces = path.join(os.homedir(), '.claude', 'plugins', 'marketplaces');
+  const marketplaces = path.join(pluginsDir(), 'marketplaces');
   for (const market of subdirs(marketplaces)) {
     const direct = path.join(market, 'skills', name);
     if (isSkillDir(direct)) return direct;
@@ -174,6 +218,8 @@ function resolveSkillDir(skillName) {
       if (isSkillDir(dir)) return dir;
     }
   }
+  const installed = installedSkillDir(skillName, candidates);
+  if (installed) return installed;
   for (const name of candidates) {
     const dir = pluginSkillDir(name);
     if (dir) return dir;
