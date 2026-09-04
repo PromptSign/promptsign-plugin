@@ -41,9 +41,10 @@ Re-run the status command afterwards to confirm.
 
 ## Notes
 
-- `PROMPTSIGN_STRICT=1` makes verification failures block instead of warn. Suggest
-  it only once a user's own instruction files are actually signed; on a mostly
-  unsigned machine it will block constantly.
+- `PROMPTSIGN_STRICT=1` makes failures fail closed instead of warning: a
+  SessionStart failure ends the session, and a skill that cannot be located on
+  disk, or whose verifier errors out, is blocked. It does not change unsigned
+  files, which stay warn-only unless a policy rule says `enforce`.
 - The plugin ships a pinned Sigstore trust root in `trust/`. It is used only when
   the machine has no `PROMPTSIGN_TRUST_DIR` and no `PROMPTSIGN_HOME` of its own,
   so an enterprise private trust root is never silently overridden.
