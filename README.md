@@ -6,8 +6,22 @@ matches what was signed.
 
 Signing and verification are [Sigstore](https://sigstore.dev) keyless: the same
 infrastructure behind npm provenance and PyPI attestations. There is no key to
-store, lose, or rotate, and verification runs offline against a trust root
+store, lose, or rotate. Verification runs offline against a trust root
 pinned in this repo. Nothing phones home, ever.
+
+## See it work
+
+[![A signed skill is tampered with after install, and verification catches it](https://promptsign.ai/media/promptsign-demo-v1.gif?c=plugin-readme)](https://promptsign.ai/posts/what-signing-proves?c=plugin-readme)
+
+A signed skill, tampered with after install and caught twice, then the objection
+everyone raises: what stops the attacker signing their own copy? 2 minutes, silent
+and captioned. 
+[The write-up](https://promptsign.ai/posts/what-signing-proves?c=plugin-readme) and
+the repository it runs against:
+[PromptSign/tell-a-joke](https://github.com/PromptSign/tell-a-joke).
+
+The image is hosted on promptsign.ai rather than committed here, so installing
+this plugin does not pull video's megabytes along with it.
 
 ## Install
 
@@ -24,10 +38,10 @@ plugin is. Confirm it landed, or install one by hand if it didn't, with:
 /promptsign:setup
 ```
 
-which reports whether a verifier is present and how to get one if not. See
+It reports whether a verifier is present and how to get one if not. See
 [Runtime](#runtime).
 
-## What it does
+## What the plugin does
 
 | Hook | When | Behaviour |
 |---|---|---|
@@ -35,8 +49,14 @@ which reports whether a verifier is present and how to get one if not. See
 | `PreToolUse` (`Skill`) | before a skill runs | re-verify that skill's bundle; a failure exits 2, which blocks the call and tells the model why |
 
 Fail-open by default: most of the ecosystem is unsigned today, and a plugin that
-blocked on every unsigned file would be uninstalled within the hour. Set
-`PROMPTSIGN_STRICT=1` once your own files are signed and both hooks fail closed.
+blocked every unsigned file would be uninstalled within an hour. Blocking
+unsigned files is a [policy](#policy) decision: use the rule `"action":
+"enforce"` once your own files are signed.
+
+`PROMPTSIGN_STRICT=1` environment variable is a narrower lever. It leaves
+unsigned files alone but makes failures fail closed: a SessionStart failure ends
+the session instead of being reported into it, and a skill that cannot be
+located on disk, or whose verifier errors out, is blocked rather than allowed.
 
 > **Caveat, by design:** skill frontmatter *descriptions* enter model context at
 > session start, before `PreToolUse` can fire. `SessionStart` and install-time
@@ -60,15 +80,83 @@ Verification needs the Rust verifier, and this plugin ships neither a binary
    own `node_modules` automatically, since the repo ships a `package.json` and
    a lockfile. Run `/promptsign:setup` (no flags) to confirm this landed. If it
    didn't, most often because you loaded the plugin with `claude --plugin-dir`
-   rather than through a marketplace, or the automatic install failed quietly,
+   rather than through a marketplace, or the automatic install failed quietly.
    `/promptsign:setup --install` installs it by hand.
 3. **Neither.** The plugin says so once at session start and verifies nothing.
    It does not install anything behind your back beyond the automatic step
    above, which is Claude Code's own plugin-install behavior, not this
    plugin's.
 
-## Configuration
+## Policy
 
+Policy decides *which* signatures count. A valid signature on its own proves
+little, because an attacker can validly sign their own skill. The policy file
+says which identities may sign which names, and what happens when they don't.
+
+You need no policy file to start. With none present, this is the built-in
+default:
+
+```json
+{
+  "schema": "promptsign/policy/v1",
+  "default": "warn",
+  "rules": [
+    { "pattern": "*", "action": "warn", "tofu": true }
+  ]
+}
+```
+
+Every artifact matches, nothing is required of the signer, problems are reported
+rather than enforced, and the first signer seen for a name is remembered and
+required from then on. That last flag, `tofu`, is what does the real work on day
+one.
+
+To write your own, the first of these that exists wins:
+
+| Location | Scope |
+|---|---|
+| `PROMPTSIGN_POLICY` | One shell session or CI job. |
+| `.promptsign/policy.json` | The project being verified. Check it in, and a team shares one policy. |
+| `~/.promptsign/policy.json` | Every project on the machine. |
+
+With the `promptsign` binary installed, write one out and confirm which is in
+effect. `init` refuses to overwrite an existing file:
+
+```bash
+promptsign policy init            # ./.promptsign/policy.json
+promptsign policy init --global   # ~/.promptsign/policy.json
+promptsign policy show            # the effective policy, and the file it came from
+```
+
+With only `@promptsign/verify` there is no CLI to run, so create the file by
+hand at one of the paths above.
+
+Blocking unsigned files means an `enforce` catch-all. An allowlist puts the
+specific rule ahead of it, since the first matching rule wins:
+
+```json
+{
+  "schema": "promptsign/policy/v1",
+  "default": "enforce",
+  "rules": [
+    {
+      "pattern": "acme-*",
+      "identity": "https://github.com/acme/*",
+      "issuer": "https://token.actions.githubusercontent.com",
+      "action": "enforce"
+    },
+    { "pattern": "*", "action": "enforce", "tofu": true }
+  ]
+}
+```
+
+Anything named `acme-*` must now be signed by a GitHub Actions workflow in the
+`acme` organisation. Everything else must at least be signed by someone,
+consistently. Every rule field is documented at
+[promptsign.ai/docs#policy](https://promptsign.ai/docs?c=plugin-readme#policy).
+
+## Configuration
+Configuration is through environment variables.
 | Variable | Effect |
 |---|---|
 | `PROMPTSIGN_STRICT=1` | Fail closed: unresolvable skills and verification failures block. |
@@ -76,7 +164,7 @@ Verification needs the Rust verifier, and this plugin ships neither a binary
 | `PROMPTSIGN_SKILL_ROOTS` | Extra skill directories to search, path-delimiter separated. |
 | `PROMPTSIGN_TRUST_DIR` | Trust root other than the one pinned in `trust/`. |
 | `PROMPTSIGN_HOME` | PromptSign state directory (default `~/.promptsign`). Set it, and the pinned trust root is not applied. |
-| `PROMPTSIGN_POLICY` | Explicit trust policy path (see `spec/04-policy.md`). |
+| `PROMPTSIGN_POLICY` | Explicit trust policy path (see [Policy](#policy)). |
 
 Enterprise: ship the plugin through managed settings so users cannot disable it,
 and set `PROMPTSIGN_STRICT=1` with a managed `policy.json`.
