@@ -81,10 +81,25 @@ jobs:
       # signed. This checks that the identity is the one we tell users to
       # expect, the string in the README, against the tree as committed. A
       # glob because the ref, and so the identity, differs per release tag.
+      #
+      # `badge` renders the same SVG we tell other repositories to commit and
+      # display, from this run rather than a claim: if we ask other publishers
+      # to show it, this repo has to show a real one too.
       - uses: PromptSign/promptsign-verify@ebbc7d69011428db1198cc96b2e1f023bacce181 # v1.0.0
         with:
           path: .
           identity: https://github.com/PromptSign/promptsign-plugin/.github/workflows/sign.yml@refs/tags/promptsign--v*
+          badge: .github/promptsign-badge.svg
+
+      - name: keep the badge current
+        run: |
+          set -euo pipefail
+          git add .github/promptsign-badge.svg
+          if git diff --cached --quiet -- .github/promptsign-badge.svg; then
+            echo "badge unchanged"; exit 0
+          fi
+          git commit -m "sign: refresh badge for ${{ github.ref_name }}"
+          git push origin HEAD:main
 
   # Scheduled arm: verify what is published without signing anything. Needs no
   # id-token and no write access, which is the point of splitting it out.

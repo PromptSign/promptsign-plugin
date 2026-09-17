@@ -1,5 +1,7 @@
 # PromptSign for Claude Code
 
+[![PromptSign](.github/promptsign-badge.svg)](https://promptsign.ai/verified#PromptSign/promptsign-plugin)
+
 Verifies signatures on the instruction files Claude Code loads: `CLAUDE.md`,
 skills, and agent definitions. It also blocks a skill whose bundle no longer
 matches what was signed.
