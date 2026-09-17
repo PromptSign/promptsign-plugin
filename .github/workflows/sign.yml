@@ -1,23 +1,22 @@
 # Dogfooding: this plugin ships signed, using our own actions to do it.
 #
-# "Sign your releases" from an unsigned publisher is the first objection anyone
-# raises, and it is a fair one. Pushing a release tag (as `claude plugin tag .
-# --push` does) re-signs the plugin directory at that commit and commits the
-# resulting bundle back to main, so the tree a user clones always carries a
-# signature made by this workflow's own identity. There is no key anywhere.
+# "Sign your releases" from an unsigned publisher is a fair objection. Pushing a
+# release tag (as `claude plugin tag . --push` does) re-signs the plugin
+# directory at that commit and commits the resulting bundle back to main, so the
+# tree a user clones carries a signature made by this workflow's own identity.
+# No signing key exists.
 #
-# Deliberately not triggered on every push to main: that made every ordinary
-# push get a bot commit added on top, leaving a contributor's local main one
-# commit behind origin after every single push. Signing only on the tag a
-# release actually ships under confines that to once per release.
+# This does not trigger on every push to main. That put a bot commit on top of
+# each ordinary push, leaving a contributor's local main one commit behind
+# origin. A release tag is now the only trigger, so it happens once per release.
 #
 # The manifest skips .promptsign/, .git/ and node_modules/, so committing the
-# bundle back does not invalidate it, which is what lets the bundle-commit step
+# bundle back does not invalidate it. That is what lets the bundle-commit step
 # land after the tag rather than before it.
 #
 # Our own actions are pinned by commit SHA rather than by tag. A tag can be
-# moved and a SHA cannot, and this workflow is exactly the case the
-# promptsign-sign README says to use a SHA for.
+# moved and a SHA cannot, and the promptsign-sign README names this workflow's
+# case as the one to use a SHA for.
 
 name: sign
 
@@ -43,33 +42,59 @@ jobs:
 
       # The signed manifest records the plugin's own version, so a consumer can
       # tell which release a copy of these files came from, rather than only
-      # that it came from us. plugin.json is the single source of that number.
+      # that it came from us. plugin.json is the one source of that number.
       - id: meta
         run: echo "version=$(node -p "require('./.claude-plugin/plugin.json').version")" >> "$GITHUB_OUTPUT"
 
       - id: sign
-        uses: PromptSign/promptsign-sign@cc4e6dd8c49e6ba1e3dee15a26001d4806323d8f # v1.0.0
+        uses: PromptSign/promptsign-sign@b4ae8f9e4978694985c7e539fcd0199ddfcaf9e5 # v1.0.1
         with:
           path: .
           name: promptsign
           kind: plugin
           version: ${{ steps.meta.outputs.version }}
 
-      # Stage before comparing. On the first run the bundle is untracked, and
+      # The signing action verifies its own output, but without pinning who
+      # signed. This checks the identity against the one we tell users to
+      # expect, the string in the README. A glob, because the ref, and so the
+      # identity, differs per release tag.
+      #
+      # `badge` renders the same SVG we tell other repositories to commit and
+      # display, from this run rather than from a claim: if we ask other
+      # publishers to show it, this repo has to show a real one too.
+      #
+      # The badge goes in .promptsign/, not .github/. The manifest covers every
+      # file under the signed root except the host-owned skip set, and
+      # .promptsign/ is in that set while .github/ is not: .github/workflows/
+      # is in this bundle's own file list. A badge written to .github/ after
+      # signing would be a signed file the signing job then rewrites, leaving
+      # main failing verification until the next release. No --exclude flag
+      # exists to reach for, so the carriage directory carries it.
+      #
+      # This runs before the commit rather than after it, so a signature that
+      # does not verify never reaches main. Excluding .promptsign/ keeps the
+      # tree checked here and the tree committed below identical.
+      - uses: PromptSign/promptsign-verify@65c2a57b56df6b4d0d83be30c4476f3621649a98 # v1.1.1
+        with:
+          path: .
+          identity: https://github.com/PromptSign/promptsign-plugin/.github/workflows/sign.yml@refs/tags/promptsign--v*
+          badge: .promptsign/badge.svg
+
+      # Stage before comparing. On the first run both files are untracked, and
       # `git diff` reports an untracked file as unchanged, so the plain form
-      # would skip the commit forever and no published copy would carry a
+      # would skip the commit on every run and no published copy would carry a
       # signature.
       #
       # Checkout leaves HEAD detached at the tag, not on a branch, since this
       # runs from a tag push. `push origin HEAD:main` targets main explicitly
-      # rather than relying on an upstream that detached HEAD doesn't have, and
-      # only succeeds as a fast-forward, so it fails loudly instead of
-      # clobbering history if main moved after the tag was cut.
-      - name: commit the bundle
+      # rather than relying on an upstream that detached HEAD does not have, and
+      # only succeeds as a fast-forward, so it fails instead of clobbering
+      # history if main moved after the tag was cut.
+      - name: commit the bundle and badge
         run: |
           set -euo pipefail
-          git add .promptsign/bundle.json
-          if git diff --cached --quiet -- .promptsign/bundle.json; then
+          git add .promptsign/bundle.json .promptsign/badge.svg
+          if git diff --cached --quiet -- .promptsign; then
             echo "bundle unchanged"; exit 0
           fi
           git config user.name  'github-actions[bot]'
@@ -77,32 +102,8 @@ jobs:
           git commit -m 'sign: refresh bundle for ${{ github.ref_name }}'
           git push origin HEAD:main
 
-      # The signing action verifies its own output, but without pinning who
-      # signed. This checks that the identity is the one we tell users to
-      # expect, the string in the README, against the tree as committed. A
-      # glob because the ref, and so the identity, differs per release tag.
-      #
-      # `badge` renders the same SVG we tell other repositories to commit and
-      # display, from this run rather than a claim: if we ask other publishers
-      # to show it, this repo has to show a real one too.
-      - uses: PromptSign/promptsign-verify@c50f41716b1b4886d2e41cca1ac3cc43bf8ca539 # v1.1.0
-        with:
-          path: .
-          identity: https://github.com/PromptSign/promptsign-plugin/.github/workflows/sign.yml@refs/tags/promptsign--v*
-          badge: .github/promptsign-badge.svg
-
-      - name: keep the badge current
-        run: |
-          set -euo pipefail
-          git add .github/promptsign-badge.svg
-          if git diff --cached --quiet -- .github/promptsign-badge.svg; then
-            echo "badge unchanged"; exit 0
-          fi
-          git commit -m "sign: refresh badge for ${{ github.ref_name }}"
-          git push origin HEAD:main
-
   # Scheduled arm: verify what is published without signing anything. Needs no
-  # id-token and no write access, which is the point of splitting it out.
+  # id-token and no write access, which is why it is a separate job.
   drift:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -110,7 +111,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: PromptSign/promptsign-verify@c50f41716b1b4886d2e41cca1ac3cc43bf8ca539 # v1.1.0
+      - uses: PromptSign/promptsign-verify@65c2a57b56df6b4d0d83be30c4476f3621649a98 # v1.1.1
         with:
           path: .
           identity: https://github.com/PromptSign/promptsign-plugin/.github/workflows/sign.yml@refs/tags/promptsign--v*
