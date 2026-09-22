@@ -34,8 +34,12 @@ permissions:
   id-token: write # mint the Sigstore OIDC token (keyless signing)
 
 jobs:
+  # Tag pushes only. A workflow_dispatch used to reach this job too, where it
+  # signed main and then failed the identity check below, since that pins the
+  # ref to a release tag. Dispatch still runs the drift job, which is the thing
+  # worth running by hand.
   sign:
-    if: github.event_name != 'schedule' && github.actor != 'github-actions[bot]'
+    if: startsWith(github.ref, 'refs/tags/') && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -43,8 +47,28 @@ jobs:
       # The signed manifest records the plugin's own version, so a consumer can
       # tell which release a copy of these files came from, rather than only
       # that it came from us. plugin.json is the one source of that number.
+      #
+      # 0.3.7 shipped with 0.3.6 in all three files: a `git add` that named a
+      # path git had already staged as deleted aborted the whole command, so the
+      # version bump never entered the commit and the tag went on top of it
+      # anyway. The manifest then recorded the wrong release. Checking the three
+      # files against the tag costs nothing and fails before anything is signed.
       - id: meta
-        run: echo "version=$(node -p "require('./.claude-plugin/plugin.json').version")" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#promptsign--v}"
+          plugin=$(node -p "require('./.claude-plugin/plugin.json').version")
+          pkg=$(node -p "require('./package.json').version")
+          lock=$(node -p "require('./package-lock.json').version")
+          locked=$(node -p "require('./package-lock.json').packages[''].version")
+          for got in "$plugin" "$pkg" "$lock" "$locked"; do
+            if [ "$got" != "$tag" ]; then
+              echo "::error::Tag says $tag but the version fields read" \
+                   "plugin.json=$plugin package.json=$pkg package-lock.json=$lock/$locked."
+              exit 1
+            fi
+          done
+          echo "version=$plugin" >> "$GITHUB_OUTPUT"
 
       - id: sign
         uses: PromptSign/promptsign-sign@b4ae8f9e4978694985c7e539fcd0199ddfcaf9e5 # v1.0.1
