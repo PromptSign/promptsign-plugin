@@ -89,44 +89,82 @@ Verification needs the Rust verifier, and this plugin ships neither a binary
    above, which is Claude Code's own plugin-install behavior, not this
    plugin's.
 
-## What this plugin runs, reads, writes and fetches
+## What this plugin runs, reads, writes, and fetches
 
-Everything below is the complete list. The plugin sends nothing anywhere: no telemetry, no
-analytics, no network calls during verification.
+This is the complete list.
 
-**Runs.** Both hooks run `node ${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs`, which reads the hook
-event from stdin and either passes it to the `promptsign` binary (`promptsign hook`) if one is on
-`PATH` or set in `PROMPTSIGN_BIN`, or verifies in-process with `@promptsign/verify`. The
-`/promptsign:verify` skill runs `scripts/check.mjs` the same way. `/promptsign:setup` runs
-`scripts/setup.mjs`, which calls `promptsign trust show` when the binary is present.
+**Verification makes no network calls.** The plugin sends nothing anywhere during verification: no telemetry, no analytics, and no network requests.
 
-**Reads.** Instruction files under the project directory and `~/.claude` (skills, agent
-definitions, `CLAUDE.md`, `AGENTS.md`, `~/.claude/plugins/installed_plugins.json` and the installed
-plugin copies it lists), plus the skill folders under `~/.codex`, `~/.agents` and `~/.openclaw`.
-The trust root in this plugin's `trust/` folder (`fulcio.pem`, `rekor.pub`), and the policy in
-`~/.promptsign` if you have one. Environment variables it reads: `CLAUDE_PROJECT_DIR`,
-`CLAUDE_PLUGIN_ROOT`, and the `PROMPTSIGN_*` settings listed under [Configuration](#configuration).
+### Runs
 
-**Writes.** One file: `~/.promptsign/pins.json`, which records the first signer identity seen for
-each signed name (trust on first use), so a later signature by someone else is caught. Nothing
-else, and never into the files it verifies.
+Both hooks run `node ${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs`. The script:
 
-**Fetches.** Verification is offline: certificates and transparency-log proofs are stapled in each
-signature and checked against the bundled trust root. Two install steps use the network, and both
-only fetch `@promptsign/verify@0.3.2` (pinned exactly, with a lockfile) and its platform package
-from the npm registry:
+1. Reads the hook event from stdin.
+2. Uses the `promptsign` binary (`promptsign hook`) if it is on `PATH` or set in `PROMPTSIGN_BIN`.
+3. Otherwise, verifies in-process with `@promptsign/verify`.
+4. Passes the hook event through after verification.
 
-- Claude Code's own plugin install, which runs `npm install` because this repo ships a
-  `package.json` and `package-lock.json`.
-- `/promptsign:setup --install`, which runs `npm install --omit=dev --no-audit --no-fund` in
-  the plugin folder by hand.
+The `/promptsign:verify` skill runs `scripts/check.mjs` the same way.
 
-The `promptsign` binary, if you install it, comes from <https://promptsign.ai>, never from this
-plugin. Its revocation feed is fetched only when you run `promptsign revoke fetch`; the hooks read
-the cached copy.
+`/promptsign:setup` runs `scripts/setup.mjs`. If the `promptsign` binary is present, it calls `promptsign trust show`.
 
-Not part of the plugin at run time: `npm run check-trust-root` (a maintainer script that compares
-`trust/` with the canonical copy on GitHub) and the workflows in `.github/`.
+### Reads
+
+The plugin reads:
+
+* Instruction files under the project directory and `~/.claude`:
+
+  * skills
+  * agent definitions
+  * `CLAUDE.md`
+  * `AGENTS.md`
+  * `~/.claude/plugins/installed_plugins.json`
+  * installed plugin copies listed there
+* Skill folders under:
+
+  * `~/.codex`
+  * `~/.agents`
+  * `~/.openclaw`
+* Trust roots bundled in this plugin's `trust/` folder:
+
+  * `fulcio.pem`
+  * `rekor.pub`
+* The policy in `~/.promptsign`, if present.
+
+Environment variables read:
+
+* `CLAUDE_PROJECT_DIR`
+* `CLAUDE_PLUGIN_ROOT`
+* The `PROMPTSIGN_*` settings listed under [Configuration](#configuration)
+
+### Writes
+
+The plugin writes one file:
+
+`~/.promptsign/pins.json`
+
+It records the first signer identity seen for each signed name (trust on first use), so a later signature from someone else is detected.
+
+The plugin writes nothing else and never writes into files it verifies.
+
+### Fetches
+
+**Verification is offline.** Certificates and transparency-log proofs are stapled into each signature and checked against the bundled trust root.
+
+There are only two plugin install steps that access the network. Both fetch exactly `@promptsign/verify@0.3.2`, pinned by the lockfile, plus its platform package from the npm registry:
+
+* **Claude Code plugin install:** Claude Code runs `npm install` because this repository contains `package.json` and `package-lock.json`.
+* **`/promptsign:setup --install`:** The setup script runs `npm install --omit=dev --no-audit --no-fund` in the plugin directory.
+
+If you install the `promptsign` binary, it comes from https://promptsign.ai, not from this plugin. Its revocation feed is fetched only when you run `promptsign revoke fetch`; the hooks use the cached copy.
+
+### Not part of the plugin at runtime
+
+These are maintainer or CI files, not runtime behavior:
+
+* `npm run check-trust-root`: compares `trust/` with the canonical copy on GitHub.
+* `.github/` workflows.
+
 
 ## Policy
 
