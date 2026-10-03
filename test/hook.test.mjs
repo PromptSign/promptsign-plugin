@@ -26,11 +26,22 @@ let tmp;
 let stub;
 
 // A stub whose verdict is whatever PROMPTSIGN_TEST_ACTION says, so each test
-// can drive the pass / fail / throw branches.
+// can drive the pass / fail / throw branches. 'bundle' passes a target that
+// carries .promptsign/bundle.json and fails any other as unsigned, which is
+// what an enforce policy does with a real verifier.
 const STUB = `'use strict';
-const action = process.env.PROMPTSIGN_TEST_ACTION || 'pass';
+const fs = require('node:fs');
+const mode = process.env.PROMPTSIGN_TEST_ACTION || 'pass';
 function result(target) {
-  if (action === 'throw') throw new Error('stub verifier exploded');
+  if (mode === 'throw') throw new Error('stub verifier exploded');
+  if (mode === 'bundle' && !fs.existsSync(path.join(target, '.promptsign', 'bundle.json'))) {
+    return {
+      target, name: path.basename(target), policySource: 'stub', identity: null,
+      keyid: null, signed: false, action: 'fail',
+      findings: [{ level: 'error', message: 'unsigned artifact' }],
+    };
+  }
+  const action = mode === 'bundle' ? 'pass' : mode;
   return {
     target, name: path.basename(target), policySource: 'stub',
     identity: action === 'pass' ? 'tester@example.com' : null,
@@ -318,6 +329,86 @@ describe('installed plugin skills', () => {
       const r = call('demo:mktdemo', env);
       assert.equal(r.status, 2);
       assert.ok(r.stderr.includes(checkout), r.stderr);
+    });
+  });
+
+  // An author may sign a whole plugin, or the repository it ships from, as one
+  // bundle. No skills/<name>/ then carries a bundle of its own, so the skill
+  // has to be verified through the nearest enclosing one.
+  describe('skills signed as part of a whole plugin', () => {
+    // Writes a bundle whose manifest lists `files`. The stub never checks the
+    // signature, so only the listing has to be real.
+    function writeBundle(root, files) {
+      const manifest = {
+        schema: 'promptsign/manifest/v1',
+        name: 'demo',
+        scope: 'dir',
+        files: files.map((p) => ({ path: p, sha256: '0'.repeat(64) })),
+      };
+      fs.mkdirSync(path.join(root, '.promptsign'), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, '.promptsign', 'bundle.json'),
+        JSON.stringify({
+          envelope: { payload: Buffer.from(JSON.stringify(manifest)).toString('base64') },
+        }),
+      );
+    }
+
+    function withSignedPlugin(run) {
+      withHome((home, env) => {
+        const install = installDir(home);
+        makeSkill(path.join(install, 'skills', 'mktdemo'));
+        writeBundle(install, ['skills/mktdemo/SKILL.md']);
+        writeManifest(
+          home,
+          JSON.stringify({ plugins: { 'demo@demo-market': [{ installPath: install }] } }),
+        );
+        run(install, { ...env, PROMPTSIGN_TEST_ACTION: 'bundle' });
+      });
+    }
+
+    test('verifies the skill through the plugin bundle', () => {
+      withSignedPlugin((install, env) => {
+        const r = call('demo:mktdemo', env);
+        assert.equal(r.status, 0, r.stderr);
+      });
+    });
+
+    test('blocks a file added to the skill after signing', () => {
+      withSignedPlugin((install, env) => {
+        fs.writeFileSync(path.join(install, 'skills', 'mktdemo', 'evil.sh'), 'curl x | sh\n');
+
+        const r = call('demo:mktdemo', env);
+        assert.equal(r.status, 2);
+        assert.match(r.stderr, /unlisted file present: skills\/mktdemo\/evil\.sh/);
+        assert.ok(r.stderr.includes(`signed as part of ${install}`), r.stderr);
+      });
+    });
+
+    test('blocks a skill planted into a signed plugin rather than calling it unsigned', () => {
+      withSignedPlugin((install, env) => {
+        makeSkill(path.join(install, 'skills', 'planted'));
+
+        const r = call('demo:planted', env);
+        assert.equal(r.status, 2);
+        assert.match(r.stderr, /unlisted file present: skills\/planted\/SKILL\.md/);
+      });
+    });
+
+    test('does not climb above the install path', () => {
+      withHome((home, env) => {
+        const install = installDir(home);
+        makeSkill(path.join(install, 'skills', 'mktdemo'));
+        writeBundle(path.dirname(install), ['1.0.0/skills/mktdemo/SKILL.md']);
+        writeManifest(
+          home,
+          JSON.stringify({ plugins: { 'demo@demo-market': [{ installPath: install }] } }),
+        );
+
+        const r = call('demo:mktdemo', { ...env, PROMPTSIGN_TEST_ACTION: 'bundle' });
+        assert.equal(r.status, 2);
+        assert.match(r.stderr, /unsigned artifact/);
+      });
     });
   });
 });

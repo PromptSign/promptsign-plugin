@@ -5,9 +5,10 @@
 //   SessionStart      verify-tree over the project and user instruction dirs.
 //                     Failures are reported into session context, and are
 //                     non-blocking unless PROMPTSIGN_STRICT=1.
-//   PreToolUse(Skill) locate the invoked skill's directory and verify it.
-//                     Exit code 2 blocks the tool call and feeds the reason
-//                     back to the model.
+//   PreToolUse(Skill) locate the invoked skill's directory and verify it,
+//                     through the nearest enclosing bundle when the skill was
+//                     signed as part of a whole plugin. Exit code 2 blocks the
+//                     tool call and feeds the reason back to the model.
 //
 // Caveat, by design: skill frontmatter *descriptions* enter model context at
 // session start, before PreToolUse can fire. SessionStart and install-time
@@ -124,6 +125,11 @@ function isSkillDir(dir) {
   return fs.existsSync(path.join(dir, 'SKILL.md'));
 }
 
+// A resolved skill is { dir, boundary }. The boundary is the unit the skill was
+// installed as: a plugin's install path, a marketplace checkout, or the skill
+// root it was found in. The bundle lookup never climbs above it, so a skill is
+// never vouched for by a signature on a directory that merely contains it.
+
 // Returns the immediate subdirectories of dir in sorted order, or [] if it
 // cannot be read. Sorting keeps resolution deterministic when two marketplaces
 // happen to offer the same skill name.
@@ -182,7 +188,7 @@ function installedSkillDir(skillName, candidates) {
   for (const [, install] of installs) {
     for (const name of candidates) {
       const dir = path.join(install, 'skills', name);
-      if (isSkillDir(dir)) return dir;
+      if (isSkillDir(dir)) return { dir, boundary: install };
     }
   }
   return null;
@@ -197,11 +203,11 @@ function pluginSkillDir(name) {
   const marketplaces = path.join(pluginsDir(), 'marketplaces');
   for (const market of subdirs(marketplaces)) {
     const direct = path.join(market, 'skills', name);
-    if (isSkillDir(direct)) return direct;
+    if (isSkillDir(direct)) return { dir: direct, boundary: market };
     for (const container of PLUGIN_CONTAINERS) {
       for (const plugin of subdirs(path.join(market, container))) {
         const nested = path.join(plugin, 'skills', name);
-        if (isSkillDir(nested)) return nested;
+        if (isSkillDir(nested)) return { dir: nested, boundary: market };
       }
     }
   }
@@ -215,16 +221,97 @@ function resolveSkillDir(skillName) {
   for (const root of skillRoots()) {
     for (const name of candidates) {
       const dir = path.join(root, name);
-      if (isSkillDir(dir)) return dir;
+      if (isSkillDir(dir)) return { dir, boundary: root };
     }
   }
   const installed = installedSkillDir(skillName, candidates);
   if (installed) return installed;
   for (const name of candidates) {
-    const dir = pluginSkillDir(name);
-    if (dir) return dir;
+    const skill = pluginSkillDir(name);
+    if (skill) return skill;
   }
   return null;
+}
+
+function hasBundle(dir) {
+  try {
+    return fs.statSync(path.join(dir, '.promptsign', 'bundle.json')).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isWithin(dir, boundary) {
+  const rel = path.relative(boundary, dir);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+// The directory whose signature covers a skill: the skill's own bundle when it
+// has one, otherwise the nearest enclosing bundle within the boundary. An
+// author may sign a whole plugin or repository as one unit, and then no
+// skills/<name>/ directory carries a bundle of its own.
+function bundleRoot({ dir, boundary }) {
+  for (let d = dir; isWithin(d, boundary); d = path.dirname(d)) {
+    if (hasBundle(d)) return d;
+    if (path.dirname(d) === d) break;
+  }
+  return dir;
+}
+
+// The manifest a bundle claims, read without checking its signature. Only used
+// next to napi.verify on the same bundle, which authenticates it.
+function claimedManifest(root) {
+  try {
+    const bundle = JSON.parse(fs.readFileSync(path.join(root, '.promptsign', 'bundle.json'), 'utf8'));
+    return JSON.parse(Buffer.from(bundle.envelope.payload, 'base64').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// The same walk promptsign-core's manifest builder does, so a path counts here
+// exactly when it counts to the signer: these directories and files are never
+// part of a bundle, sidecars carry signatures rather than content, and links
+// are recorded so the caller can refuse them.
+const SKIP_DIRS = new Set(['.promptsign', '.git', 'node_modules', '__pycache__', '.venv', '.in_use']);
+const SKIP_FILES = new Set(['.orphaned_at']);
+
+function walkTree(root, rel = '', out = { files: [], links: [] }) {
+  for (const ent of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
+    const child = rel ? `${rel}/${ent.name}` : ent.name;
+    if (ent.isSymbolicLink()) {
+      out.links.push(child);
+    } else if (ent.isDirectory()) {
+      if (!SKIP_DIRS.has(ent.name)) walkTree(root, child, out);
+    } else if (ent.isFile()) {
+      if (!ent.name.endsWith('.psig.json') && !SKIP_FILES.has(ent.name)) out.files.push(child);
+    }
+  }
+  return out;
+}
+
+// Files under a skill that the enclosing bundle at root does not list, in the
+// wording the core's integrity check uses. napi.verify(root) already reports
+// these for an ordinary skills/<name>/ path. Checking again from the skill's
+// side covers a skill under a directory the root's walk skips, and makes a
+// skill planted into a signed plugin fail instead of reading as unsigned.
+function unlistedInSkill(root, dir) {
+  if (root === dir) return [];
+  const prefix = path.relative(root, dir).split(path.sep).join('/');
+  const listed = new Set((claimedManifest(root)?.files ?? []).map((f) => f.path));
+  let tree;
+  try {
+    tree = walkTree(dir);
+  } catch (e) {
+    return [`${prefix}: ${e.message}`];
+  }
+  return [
+    ...tree.files
+      .map((f) => `${prefix}/${f}`)
+      .filter((p) => !listed.has(p))
+      .map((p) => `unlisted file present: ${p}`),
+    ...tree.links.map((l) => `symlink present: ${prefix}/${l}`),
+  ];
 }
 
 function preToolUse() {
@@ -232,27 +319,36 @@ function preToolUse() {
   const skillName = input.tool_input?.skill ?? input.tool_input?.name;
   if (!skillName) process.exit(0);
 
-  const dir = resolveSkillDir(String(skillName));
-  if (!dir) {
+  const skill = resolveSkillDir(String(skillName));
+  if (!skill) {
     if (STRICT) {
       block(`could not locate skill "${skillName}" on disk to verify it (strict mode)`);
     }
     process.exit(0);
   }
 
+  const root = bundleRoot(skill);
   let result;
   try {
-    result = napi.verify(dir);
+    result = napi.verify(root);
   } catch (e) {
     // The verifier itself broke, so fail closed only in strict mode.
     if (STRICT) block(`verifier error for "${skillName}": ${e.message}`);
     process.exit(0);
   }
 
+  for (const problem of unlistedInSkill(root, skill.dir)) {
+    if (!result.findings.some((f) => f.message === problem)) {
+      result.findings.push({ level: 'error', message: problem });
+    }
+    result.action = 'fail';
+  }
+
   if (result.action === 'fail') {
+    const signedAs = root === skill.dir ? '' : ` (signed as part of ${root})`;
     block(
-      `signature verification FAILED for skill "${skillName}" at ${dir}. Blocking execution.\n` +
-        formatResult(result),
+      `signature verification FAILED for skill "${skillName}" at ${skill.dir}${signedAs}. ` +
+        `Blocking execution.\n${formatResult(result)}`,
     );
   }
   process.exit(0);
