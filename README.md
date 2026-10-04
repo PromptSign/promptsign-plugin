@@ -181,7 +181,7 @@ The plugin writes nothing else and never writes into files it verifies.
 
 **Verification is offline.** Certificates and transparency-log proofs are stapled into each signature and checked against the bundled trust root.
 
-There are only two plugin install steps that access the network. Both fetch exactly `@promptsign/verify@0.3.2`, pinned by the lockfile, plus its platform package from the npm registry:
+There are only two plugin install steps that access the network. Both fetch exactly `@promptsign/verify@0.3.4`, pinned by the lockfile, plus its platform package from the npm registry:
 
 * **Claude Code plugin install:** Claude Code runs `npm install` because this repository contains `package.json` and `package-lock.json`.
 * **`/promptsign:setup --install`:** The setup script runs `npm install --omit=dev --no-audit --no-fund` in the plugin directory.
