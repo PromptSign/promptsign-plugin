@@ -17,7 +17,33 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/setup.mjs"
 ```
 
 Show the user the output as-is. It names the active verifier, the trust root in
-effect, and whether strict mode is on.
+effect, every trust root a signature may chain to, and whether strict mode is
+on.
+
+## Trusting a publisher's own CA
+
+PromptSign also verifies skills signed with OpenSSF Model Signing (OMS), which
+carry a `skill.oms.sig` or `model.sig` file. Some publishers sign with their own
+certificate authority rather than public Sigstore. Out of the box only the
+public Sigstore root is trusted, so such a skill fails with "invalid signature"
+and a message naming the CA it chains to.
+
+Adding a CA is the user's decision, never yours. Explain what it means: every
+signature that chains to that CA will verify. Then give the command and let the
+user run it:
+
+```
+promptsign trust add <name> --ca <ca.pem>
+```
+
+Here `<name>` is a short label the user picks, such as `nvidia`, and `<ca.pem>`
+is the root certificate the publisher distributes (NVIDIA ships
+`nv-agent-root-cert.pem`). The command shows the CA's subject and SHA-256
+fingerprint and asks for confirmation. `promptsign trust list` shows the added
+roots and `promptsign trust rm <name>` removes one. These are CLI commands, so
+on a machine with only `@promptsign/verify` the user needs the CLI from
+https://promptsign.ai for this step. A project cannot add a root
+for the user: roots live under `~/.promptsign/trust/roots` only.
 
 ## If no verifier is available
 

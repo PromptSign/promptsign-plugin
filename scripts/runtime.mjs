@@ -83,7 +83,11 @@ export function loadNapi() {
 /** One-line-per-finding rendering of a VerifyResult, for hook output. */
 export function formatResult(r) {
   const head = `${r.action.toUpperCase()}  ${r.name || r.target}${r.version ? `@${r.version}` : ''}`;
-  const who = r.signed && r.identity ? `  signer: ${r.identity}` : '  unsigned';
+  // A signature that is present but did not verify (an untrusted root, say)
+  // is not the same as no signature, and the findings say which it was.
+  const signer = !r.signed ? '  unsigned' : r.identity ? `  signer: ${r.identity}` : '  signature not verified';
+  const via = [r.format === 'oms' ? 'OMS signature' : null, r.root ? `root ${r.root}` : null].filter(Boolean);
+  const who = via.length ? `${signer} (${via.join(', ')})` : signer;
   const findings = (r.findings || [])
     .filter((f) => f.level !== 'info')
     .map((f) => `    - ${f.level}: ${f.message}`);

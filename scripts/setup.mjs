@@ -70,6 +70,32 @@ else if (!fs.existsSync(path.join(pinned, 'fulcio.pem'))) {
   out.push('  WARNING: no pinned trust root in the plugin. Run `promptsign trust fetch`.');
 }
 
+// Every root a signature may chain to: the pinned public root, then any the
+// user added with `promptsign trust add`. Nothing else is trusted by default,
+// so a publisher signing with its own CA (OMS certificate mode) verifies only
+// after its CA is added here.
+function trustRoots() {
+  if (napi?.trustRoots) {
+    try {
+      return napi.trustRoots().map((r) => `${r.name}  ${r.kind}  ${r.subject}`);
+    } catch (e) {
+      return [`(could not read the trust roots: ${e.message})`];
+    }
+  }
+  if (bin && bin.status === 0) {
+    const r = spawnSync(binaryName(), ['trust', 'list'], { encoding: 'utf8' });
+    if (r.status === 0) return r.stdout.trim().split('\n').filter(Boolean);
+  }
+  return null;
+}
+
+const roots = trustRoots();
+
+if (roots) {
+  out.push(`  trust roots : ${roots.length ? roots.join('\n                ') : '(none)'}`);
+  out.push('                add a publisher CA with: promptsign trust add <name> --ca <ca.pem>');
+}
+
 if (!bin && !napi) {
   out.push('');
   out.push('To fix, either:');

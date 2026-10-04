@@ -6,9 +6,10 @@
 //                     Failures are reported into session context, and are
 //                     non-blocking unless PROMPTSIGN_STRICT=1.
 //   PreToolUse(Skill) locate the invoked skill's directory and verify it,
-//                     through the nearest enclosing bundle when the skill was
-//                     signed as part of a whole plugin. Exit code 2 blocks the
-//                     tool call and feeds the reason back to the model.
+//                     through the nearest enclosing bundle (a PromptSign
+//                     bundle or an OMS signature) when the skill was signed
+//                     as part of a whole plugin. Exit code 2 blocks the tool
+//                     call and feeds the reason back to the model.
 //
 // The mod (hooks/register.ts) runs sandboxed and reaches the verifier only by
 // running this script: a PreToolUse payload for a skill, or
@@ -272,12 +273,32 @@ function resolveSkillDir(skillName) {
   return null;
 }
 
-function hasBundle(dir) {
+function isFile(p) {
   try {
-    return fs.statSync(path.join(dir, '.promptsign', 'bundle.json')).isFile();
+    return fs.statSync(p).isFile();
   } catch {
     return false;
   }
+}
+
+// OpenSSF Model Signing (OMS) writes its signature into the directory it signs:
+// skill.oms.sig for a skill, model.sig by default.
+const OMS_SIGNATURE_FILES = ['skill.oms.sig', 'model.sig'];
+
+// The signature that makes dir a bundle root, in the core's precedence: a
+// PromptSign bundle first, then an OMS signature. Null when dir has neither.
+function signatureIn(dir) {
+  if (isFile(path.join(dir, '.promptsign', 'bundle.json'))) {
+    return { format: 'promptsign', file: path.join(dir, '.promptsign', 'bundle.json') };
+  }
+  for (const name of OMS_SIGNATURE_FILES) {
+    if (isFile(path.join(dir, name))) return { format: 'oms', file: path.join(dir, name) };
+  }
+  return null;
+}
+
+function hasBundle(dir) {
+  return signatureIn(dir) !== null;
 }
 
 function isWithin(dir, boundary) {
@@ -297,15 +318,65 @@ function bundleRoot({ dir, boundary }) {
   return dir;
 }
 
-// The manifest a bundle claims, read without checking its signature. Only used
-// next to napi.verify on the same bundle, which authenticates it.
-function claimedManifest(root) {
+// The files a bundle at root claims to cover, as { format, paths }, read
+// without checking the signature. Only used next to napi.verify on the same
+// bundle, which authenticates it. A PromptSign bundle lists them in its
+// manifest, an OMS signature in its in-toto Statement's predicate.resources.
+function claimedFiles(root) {
+  const sig = signatureIn(root);
+
+  if (!sig) return null;
   try {
-    const bundle = JSON.parse(fs.readFileSync(path.join(root, '.promptsign', 'bundle.json'), 'utf8'));
-    return JSON.parse(Buffer.from(bundle.envelope.payload, 'base64').toString('utf8'));
+    const bundle = JSON.parse(fs.readFileSync(sig.file, 'utf8'));
+    const payload = sig.format === 'oms' ? bundle.dsseEnvelope.payload : bundle.envelope.payload;
+    const claimed = JSON.parse(Buffer.from(payload, 'base64').toString('utf8'));
+    const listed =
+      sig.format === 'oms'
+        ? (claimed.predicate?.resources ?? []).map((r) => r.name)
+        : (claimed.files ?? []).map((f) => f.path);
+
+    return { format: sig.format, paths: new Set(listed) };
   } catch {
-    return null;
+    return { format: sig.format, paths: new Set() };
   }
+}
+
+// The core's OMS coverage rule: a file the signature leaves out fails when an
+// agent would read or run it (an entrypoint, an executable, a context-injected
+// file, Markdown) and only warns otherwise. rel is relative to the bundle root,
+// as in the core, so "entrypoint" and "scripts/" mean the root's own.
+const ENTRYPOINTS = new Set([
+  'SKILL.md',
+  'CLAUDE.md',
+  'AGENTS.md',
+  'SOUL.md',
+  'TOOLS.md',
+  'IDENTITY.md',
+  'USER.md',
+  'HEARTBEAT.md',
+  'BOOTSTRAP.md',
+  'MEMORY.md',
+]);
+const CONTEXT_INJECTED = new Set([...ENTRYPOINTS].filter((n) => n !== 'SKILL.md'));
+const EXEC_EXTS = new Set([
+  '.py', '.sh', '.bash', '.zsh', '.js', '.mjs', '.cjs', '.ts',
+  '.ps1', '.psm1', '.cmd', '.bat', '.exe', '.rb', '.pl', '.php',
+]);
+
+function uncoveredFails(rel) {
+  const base = rel.split('/').pop();
+  const dot = base.lastIndexOf('.');
+  const ext = dot > 0 ? base.slice(dot).toLowerCase() : '';
+  const lower = rel.toLowerCase();
+
+  return (
+    (!rel.includes('/') && ENTRYPOINTS.has(rel)) ||
+    EXEC_EXTS.has(ext) ||
+    rel.split('/')[0] === 'scripts' ||
+    CONTEXT_INJECTED.has(base) ||
+    lower.endsWith('.md') ||
+    lower.endsWith('.markdown')
+  );
 }
 
 // The same walk promptsign-core's manifest builder does, so a path counts here
@@ -329,28 +400,41 @@ function walkTree(root, rel = '', out = { files: [], links: [] }) {
   return out;
 }
 
-// Files under a skill that the enclosing bundle at root does not list, in the
-// wording the core's integrity check uses. napi.verify(root) already reports
-// these for an ordinary skills/<name>/ path. Checking again from the skill's
-// side covers a skill under a directory the root's walk skips, and makes a
-// skill planted into a signed plugin fail instead of reading as unsigned.
+// Files under a skill that the enclosing bundle at root does not list, as
+// findings in the wording and level the core's own check uses for that
+// format. napi.verify(root) already reports these for an ordinary
+// skills/<name>/ path. Checking again from the skill's side covers a skill
+// under a directory the root's walk skips, and makes a skill planted into a
+// signed plugin fail instead of reading as unsigned.
 function unlistedInSkill(root, dir) {
   if (root === dir) return [];
   const prefix = path.relative(root, dir).split(path.sep).join('/');
-  const listed = new Set((claimedManifest(root)?.files ?? []).map((f) => f.path));
+  const claimed = claimedFiles(root) ?? { format: 'promptsign', paths: new Set() };
+  const error = (message) => ({ level: 'error', message });
   let tree;
   try {
     tree = walkTree(dir);
   } catch (e) {
-    return [`${prefix}: ${e.message}`];
+    return [error(`${prefix}: ${e.message}`)];
   }
-  return [
-    ...tree.files
-      .map((f) => `${prefix}/${f}`)
-      .filter((p) => !listed.has(p))
-      .map((p) => `unlisted file present: ${p}`),
-    ...tree.links.map((l) => `symlink present: ${prefix}/${l}`),
-  ];
+  const unlisted = tree.files.map((f) => `${prefix}/${f}`).filter((p) => !claimed.paths.has(p));
+  const files =
+    claimed.format === 'oms'
+      ? unlisted.map((p) => ({
+          level: uncoveredFails(p) ? 'error' : 'warn',
+          message: `uncovered: ${p} is not covered by the signature`,
+        }))
+      : unlisted.map((p) => error(`unlisted file present: ${p}`));
+
+  return [...files, ...tree.links.map((l) => error(`symlink present: ${prefix}/${l}`))];
+}
+
+// Raises result.action to at least the action a finding level implies.
+const RANK = { pass: 0, warn: 1, fail: 2 };
+
+function escalate(result, level) {
+  const to = level === 'error' ? 'fail' : level === 'warn' ? 'warn' : 'pass';
+  if (RANK[to] > (RANK[result.action] ?? 0)) result.action = to;
 }
 
 function preToolUse() {
@@ -376,11 +460,11 @@ function preToolUse() {
     process.exit(0);
   }
 
+  // A finding the core already made has already set the action.
   for (const problem of unlistedInSkill(root, skill.dir)) {
-    if (!result.findings.some((f) => f.message === problem)) {
-      result.findings.push({ level: 'error', message: problem });
-    }
-    result.action = 'fail';
+    if (result.findings.some((f) => f.message === problem.message)) continue;
+    result.findings.push(problem);
+    escalate(result, problem.level);
   }
 
   if (result.action === 'fail') {

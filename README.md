@@ -48,7 +48,7 @@ It reports whether a verifier is present and how to get one if not. See
 | Hook | When | Behaviour |
 |---|---|---|
 | `SessionStart` | before work starts | verify-tree over the project, `CLAUDE.md`/`AGENTS.md`, and `~/.claude`; failures are injected into session context |
-| `PreToolUse` (`Skill`) | before a skill runs | re-verify that skill's bundle; a failure exits 2, which blocks the call and tells the model why |
+| `PreToolUse` (`Skill`) | before a skill runs | re-verify that skill's signature, or the plugin's when the skill was signed as part of one; a failure exits 2, which blocks the call and tells the model why |
 
 Fail-open by default: most of the ecosystem is unsigned today, and a plugin that
 blocked every unsigned file would be uninstalled within an hour. Blocking
@@ -90,6 +90,28 @@ cannot override it.
 
 Also included: `/promptsign:verify <path>` for checking any skill, plugin, or
 directory by hand.
+
+### Signature formats
+
+The plugin checks PromptSign signatures (`.promptsign/bundle.json`, and
+`.psig.json` sidecars on single files) and OpenSSF Model Signing (OMS)
+signatures from `model_signing` 1.0 and later (`skill.oms.sig` or `model.sig`
+in the signed directory). A signature can sit in the skill's own folder or at
+the root of the plugin that contains it. For OMS, a file the signature does not
+cover fails when Claude would read or run it (`SKILL.md`, other Markdown,
+scripts) and warns otherwise.
+
+Only public Sigstore is trusted out of the box. A publisher that signs with its
+own certificate authority verifies once you add that CA yourself:
+
+```bash
+promptsign trust add <name> --ca <ca.pem>   # shows the CA and asks first
+promptsign trust list
+promptsign trust rm <name>
+```
+
+These are `promptsign` CLI commands, so this step needs the CLI even where the
+hooks use `@promptsign/verify`. `/promptsign:setup` lists every root in effect.
 
 ## Runtime
 
@@ -136,7 +158,7 @@ which prints one verdict per path. It reads one environment variable,
 
 The `/promptsign:verify` skill runs `scripts/check.mjs` the same way.
 
-`/promptsign:setup` runs `scripts/setup.mjs`. If the `promptsign` binary is present, it calls `promptsign trust show`.
+`/promptsign:setup` runs `scripts/setup.mjs`. If the `promptsign` binary is present, it calls `promptsign trust show`, and `promptsign trust list` when `@promptsign/verify` is not installed.
 
 ### Reads
 
@@ -159,7 +181,8 @@ The plugin reads:
 
   * `fulcio.pem`
   * `rekor.pub`
-* The policy in `~/.promptsign`, if present.
+* Trust roots you added with `promptsign trust add`, in `~/.promptsign/trust/roots`.
+* The policy in `~/.promptsign`, and the project's `.promptsign/policy.json`, if present.
 
 Environment variables read:
 
@@ -181,7 +204,7 @@ The plugin writes nothing else and never writes into files it verifies.
 
 **Verification is offline.** Certificates and transparency-log proofs are stapled into each signature and checked against the bundled trust root.
 
-There are only two plugin install steps that access the network. Both fetch exactly `@promptsign/verify@0.3.4`, pinned by the lockfile, plus its platform package from the npm registry:
+There are only two plugin install steps that access the network. Both fetch exactly `@promptsign/verify@0.4.0`, pinned by the lockfile, plus its platform package from the npm registry:
 
 * **Claude Code plugin install:** Claude Code runs `npm install` because this repository contains `package.json` and `package-lock.json`.
 * **`/promptsign:setup --install`:** The setup script runs `npm install --omit=dev --no-audit --no-fund` in the plugin directory.
@@ -220,13 +243,18 @@ rather than enforced, and the first signer seen for a name is remembered and
 required from then on. That last flag, `tofu`, is what does the real work on day
 one.
 
-To write your own, the first of these that exists wins:
+To write your own, your policy is the first of these that exists:
 
 | Location | Scope |
 |---|---|
 | `PROMPTSIGN_POLICY` | One shell session or CI job. |
-| `.promptsign/policy.json` | The project being verified. Check it in, and a team shares one policy. |
 | `~/.promptsign/policy.json` | Every project on the machine. |
+
+A project can also check in `.promptsign/policy.json`, so a team shares its
+requirements. It applies on top of yours and can only tighten it: the stricter
+verdict wins, and a project file cannot relax a rule, turn checks off, or
+trust a signer or root that your policy does not. Since 0.4.0, a relaxation
+that used to live in a project file belongs in `~/.promptsign/policy.json`.
 
 With the `promptsign` binary installed, write one out and confirm which is in
 effect. `init` refuses to overwrite an existing file:

