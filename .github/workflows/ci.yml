@@ -66,3 +66,5 @@ jobs:
       # than at submission review.
       - run: claude plugin validate . --strict
       - run: claude plugin validate ./.claude-plugin/plugin.json --strict
+      # The mod's hooks (hooks/register.ts) against the engine's own test kit.
+      - run: claude plugin test .

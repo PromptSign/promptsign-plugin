@@ -413,6 +413,50 @@ describe('installed plugin skills', () => {
   });
 });
 
+describe('verdict mode', () => {
+  // The mod runs sandboxed and gets per-path verdicts from `verify.mjs verdict`.
+  const verdict = (paths, env) => {
+    const r = spawnSync(process.execPath, [HOOK, 'verdict', ...paths], {
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: ROOT, PROMPTSIGN_HOME: tmp, ...env },
+    });
+    return { status: r.status, verdicts: JSON.parse(r.stdout || 'null') };
+  };
+
+  test('prints one verdict per path from the napi verifier', () => {
+    const file = path.join(tmp, 'CLAUDE.md');
+    const r = verdict([file, tmp], {
+      PROMPTSIGN_BIN: NO_BINARY,
+      PROMPTSIGN_NAPI: stub,
+      PROMPTSIGN_TEST_ACTION: 'fail',
+    });
+    assert.equal(r.status, 0);
+    assert.deepEqual(
+      r.verdicts.map((v) => [v.path, v.action]),
+      [
+        [file, 'fail'],
+        [tmp, 'fail'],
+      ],
+    );
+    assert.match(r.verdicts[0].report, /stub says no/);
+  });
+
+  test('says so when no verifier is available', () => {
+    const r = verdict([tmp], { PROMPTSIGN_BIN: NO_BINARY, PROMPTSIGN_NAPI: path.join(tmp, 'absent.cjs') });
+    assert.deepEqual(r.verdicts, [{ path: tmp, action: 'none', report: 'no verifier available' }]);
+  });
+
+  test('reports a verifier that throws as an error on that path', () => {
+    const r = verdict([tmp], {
+      PROMPTSIGN_BIN: NO_BINARY,
+      PROMPTSIGN_NAPI: stub,
+      PROMPTSIGN_TEST_ACTION: 'throw',
+    });
+    assert.equal(r.verdicts[0].action, 'error');
+    assert.match(r.verdicts[0].report, /stub verifier exploded/);
+  });
+});
+
 describe('SessionStart', () => {
   test('reports failures into context without blocking', () => {
     const r = runHook(

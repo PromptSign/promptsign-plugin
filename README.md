@@ -64,6 +64,30 @@ located on disk, or whose verifier errors out, is blocked rather than allowed.
 > session start, before `PreToolUse` can fire. `SessionStart` and install-time
 > verification are the primary controls; `PreToolUse` is defense in depth.
 
+### The mod: gating what Claude reads
+
+On Claude Code 2.1.287 and later, where function hooks (mods) are enabled, the
+plugin also loads a hooks module, `hooks/register.ts`. The hooks above can warn
+or refuse; the module changes what the model reads before it reads it:
+
+| Event | When | Behaviour |
+|---|---|---|
+| `skill.prompt` | every skill expansion: a typed `/name`, the Skill tool, a skill preloaded into a subagent | a skill that fails verification reaches Claude as a notice instead of its text |
+| `prompt.context` | once per conversation, before the first message | a `CLAUDE.md` or rules file that fails verification is replaced by a notice; your organization's managed files are never touched |
+| `plugin.register` | before another plugin's hooks module loads | a user-installed plugin with a module that fails verification is refused |
+
+Unsigned is still a policy decision, as for the hooks. Under
+`PROMPTSIGN_STRICT=1` a verifier that breaks or is missing withholds the skill,
+file, or module instead of letting it through.
+
+The hooks stay on: mods do not run under `claude -p` or `--safe-mode`, so the
+hooks are what covers headless runs. On older Claude Code versions the plugin
+works as before, with the hooks alone.
+
+An organization can list the plugin in managed settings (`prependPlugins`),
+which seats the module in the organization's tier, where a person's own plugins
+cannot override it.
+
 Also included: `/promptsign:verify <path>` for checking any skill, plugin, or
 directory by hand.
 
@@ -103,6 +127,12 @@ Both hooks run `node ${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs`. The script:
 2. Uses the `promptsign` binary (`promptsign hook`) if it is on `PATH` or set in `PROMPTSIGN_BIN`.
 3. Otherwise, verifies in-process with `@promptsign/verify`.
 4. Passes the hook event through after verification.
+
+The mod (`hooks/register.ts`) runs in Claude Code's sandbox and runs the same
+script through Claude Code: with a `PreToolUse` event for a skill, or as
+`verify.mjs verdict <path>...` for instruction files and plugin directories,
+which prints one verdict per path. It reads one environment variable,
+`PROMPTSIGN_STRICT`, and makes no other calls besides on-screen notices.
 
 The `/promptsign:verify` skill runs `scripts/check.mjs` the same way.
 

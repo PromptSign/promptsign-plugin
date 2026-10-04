@@ -10,6 +10,11 @@
 //                     signed as part of a whole plugin. Exit code 2 blocks the
 //                     tool call and feeds the reason back to the model.
 //
+// The mod (hooks/register.ts) runs sandboxed and reaches the verifier only by
+// running this script: a PreToolUse payload for a skill, or
+// `verify.mjs verdict <path>...` for instruction files and plugin roots, which
+// prints one verdict per path as a JSON array.
+//
 // Caveat, by design: skill frontmatter *descriptions* enter model context at
 // session start, before PreToolUse can fire. SessionStart and install-time
 // verification are the primary controls; PreToolUse is defense in depth.
@@ -39,6 +44,7 @@ import {
 } from './runtime.mjs';
 
 const stdinRaw = (() => {
+  if (process.argv[2] === 'verdict') return '';
   try {
     return fs.readFileSync(0, 'utf8');
   } catch {
@@ -58,6 +64,39 @@ const event = input.hook_event_name || process.argv[2];
 const projectDir = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
 applyTrustEnv();
+
+// One path's VerifyResult, from the binary when it answers and from the napi
+// binding otherwise. Null when this machine has neither.
+function verifyPath(target) {
+  const bin = spawnSync(binaryName(), ['verify', '--json', target], { encoding: 'utf8' });
+  if (!bin.error && (bin.status === 0 || bin.status === 2)) {
+    try {
+      return JSON.parse(bin.stdout);
+    } catch {
+      // Not the JSON this script expects from `verify`, so not our binary.
+    }
+  }
+  const napi = loadNapi();
+  return napi ? napi.verify(target) : null;
+}
+
+// `verify.mjs verdict <path>...`: { path, action, report } per path, action
+// being the verifier's own, 'none' with no verifier, or 'error' when the
+// verifier broke on that path.
+if (process.argv[2] === 'verdict') {
+  const verdicts = process.argv.slice(3).map((target) => {
+    try {
+      const r = verifyPath(target);
+      return r
+        ? { path: target, action: r.action, report: formatResult(r) }
+        : { path: target, action: 'none', report: 'no verifier available' };
+    } catch (e) {
+      return { path: target, action: 'error', report: e.message };
+    }
+  });
+  process.stdout.write(`${JSON.stringify(verdicts)}\n`);
+  process.exit(0);
+}
 
 function block(reason) {
   process.stderr.write(`PromptSign: ${reason}\n`);

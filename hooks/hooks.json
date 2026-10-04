@@ -1,5 +1,8 @@
 {
-  "description": "Two enforcement points, per DESIGN.md 4.1. SessionStart verifies every skill, agent definition and CLAUDE.md/AGENTS.md under the project and ~/.claude, reporting failures into session context. PreToolUse(Skill) re-verifies the skill bundle at invocation time and blocks execution on a signature failure. Fail-open by default (the ecosystem is mostly unsigned); PROMPTSIGN_STRICT=1 makes both fail closed.",
+  "description": "Two enforcement points, per DESIGN.md 4.1. SessionStart verifies every skill, agent definition and CLAUDE.md/AGENTS.md under the project and ~/.claude, reporting failures into session context. PreToolUse(Skill) re-verifies the skill bundle at invocation time and blocks execution on a signature failure. The module (register.ts, Claude Code mods) gates what the model reads before it reads it: every skill expansion, each CLAUDE.md behind the first message, and each user hooks module before it loads. Fail-open by default (the ecosystem is mostly unsigned); PROMPTSIGN_STRICT=1 makes them fail closed.",
+  "modules": [
+    "./register.ts"
+  ],
   "hooks": {
     "SessionStart": [
       {
