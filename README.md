@@ -74,7 +74,7 @@ or refuse; the module changes what the model reads before it reads it:
 |---|---|---|
 | `skill.prompt` | every skill expansion: a typed `/name`, the Skill tool, a skill preloaded into a subagent | a skill that fails verification reaches Claude as a notice instead of its text |
 | `prompt.context` | once per conversation, before the first message | a `CLAUDE.md` or rules file that fails verification is replaced by a notice; your organization's managed files are never touched |
-| `plugin.register` | before another plugin's hooks module loads | a user-installed plugin with a module that fails verification is refused |
+| `plugin.register` | before another plugin's hooks module loads | the whole plugin is verified, and one that fails is refused. Claude Code fires this event only for plugins that ship a hooks module; any other plugin is still reported by `SessionStart`, and its skills are gated by `skill.prompt` |
 
 Unsigned is still a policy decision, as for the hooks. Under
 `PROMPTSIGN_STRICT=1` a verifier that breaks or is missing withholds the skill,

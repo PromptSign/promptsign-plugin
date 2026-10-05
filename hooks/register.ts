@@ -8,8 +8,9 @@
 //                    reaches the model as a notice instead of its text.
 //   prompt.context   each CLAUDE.md and rules file behind the first message.
 //                    One that fails is replaced by a notice.
-//   plugin.register  each user-installed hooks module before it loads. One
-//                    that fails is refused.
+//   plugin.register  each user-installed plugin that ships a hooks module,
+//                    before the module loads. The check covers the whole
+//                    plugin directory; a plugin that fails is refused.
 //
 // Unsigned is not a failure: the trust policy decides what unsigned means, as
 // it does for the hooks. PROMPTSIGN_STRICT=1 adds that a broken or missing
