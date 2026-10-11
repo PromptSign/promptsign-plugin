@@ -76,6 +76,16 @@ or refuse; the module changes what the model reads before it reads it:
 | `prompt.context` | once per conversation, before the first message | a `CLAUDE.md` or rules file that fails verification is replaced by a notice; your organization's managed files are never touched |
 | `plugin.register` | before another plugin's hooks module loads | the whole plugin is verified, and one that fails is refused. Claude Code fires this event only for plugins that ship a hooks module; any other plugin is still reported by `SessionStart`, and its skills are gated by `skill.prompt` |
 
+What each hook changes:
+
+* `skill.prompt` replaces the text of a skill that failed verification with a notice. A skill that passes reaches Claude unchanged.
+* `prompt.context` replaces the content of a `CLAUDE.md` or rules file that failed verification with a notice. Files that pass reach Claude unchanged, and your organization's managed files are left alone.
+* `plugin.register` refuses to load a plugin that failed verification. A plugin that passes loads unchanged.
+
+The mod does not edit files on disk, settings or other hooks, and it adds no tool.
+
+**What the mod runs and sends.** The mod calls `process.run` for one program, `node`, on one file shipped in this plugin, `scripts/verify.mjs`. The mod sandbox has no Node of its own, and verification needs the `promptsign` binary or the `@promptsign/verify` addon, so the mod goes through `node`. For instruction files and plugin directories the arguments are `verdict <path>...`. For a skill there are none, and the skill name goes to the script's stdin as a hook event. Only that local process receives the skill name, the file paths and the plugin directory. It never receives file contents, and the mod makes no http call, so nothing leaves the machine. The mod reads one environment variable, `PROMPTSIGN_STRICT`, a `1`-or-unset switch. It is not a credential, and the mod does not pass it on.
+
 Unsigned is still a policy decision, as for the hooks. Under
 `PROMPTSIGN_STRICT=1` a verifier that breaks or is missing withholds the skill,
 file, or module instead of letting it through.
@@ -151,10 +161,11 @@ Both hooks run `node ${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs`. The script:
 4. Passes the hook event through after verification.
 
 The mod (`hooks/register.ts`) runs in Claude Code's sandbox and runs the same
-script through Claude Code: with a `PreToolUse` event for a skill, or as
-`verify.mjs verdict <path>...` for instruction files and plugin directories,
-which prints one verdict per path. It reads one environment variable,
-`PROMPTSIGN_STRICT`, and makes no other calls besides on-screen notices.
+script through Claude Code, with `node` as the only program: with a `PreToolUse`
+event for a skill, or as `verify.mjs verdict <path>...` for instruction files and
+plugin directories, which prints one verdict per path. It reads one environment
+variable, `PROMPTSIGN_STRICT`, and makes no other calls besides on-screen notices.
+See "The mod: gating what Claude reads" for what it sends.
 
 The `/promptsign:verify` skill runs `scripts/check.mjs` the same way.
 

