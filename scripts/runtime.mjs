@@ -37,7 +37,7 @@ export const PLUGIN_ROOT =
  *  fail-open with warnings, because most of the ecosystem is still unsigned. */
 export const STRICT = process.env.PROMPTSIGN_STRICT === '1';
 
-/** The Sigstore roots this plugin pins, shipped as two text files so that a
+/** The Sigstore roots this plugin pins, shipped as files in trust/ so that a
  *  fresh install verifies offline without a `promptsign trust fetch` first.
  *
  *  Deliberately does not override an operator's own configuration: an explicit

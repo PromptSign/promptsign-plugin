@@ -26,7 +26,7 @@ const TRUST_DIR = path.join(path.dirname(HERE), 'trust');
 // Tracks main rather than a tag on purpose. A rotation landing in core should
 // turn this red immediately, and that red build is the notification.
 const CANONICAL_BASE = 'https://raw.githubusercontent.com/PromptSign/promptsign-core/main/trust';
-const FILES = ['fulcio.pem', 'rekor.pub'];
+const FILES = ['fulcio.pem', 'rekor.pub', 'trusted_root.json'];
 
 const ATTEMPTS = 3;
 const TIMEOUT_MS = 10_000;
@@ -93,8 +93,8 @@ function report(drifted) {
       `Rotate in promptsign-core, where trust/README.md has the procedure. Then\n` +
       `bring the change across:\n\n` +
       FILES.map((f) => `  curl -fsSL ${CANONICAL_BASE}/${f} -o trust/${f}`).join('\n') +
-      `\n\nA change to either file is security-relevant. Give it its own commit, state\n` +
-      `the new Rekor log id in the message, and bump the plugin version.\n`,
+      `\n\nA change to any of these files is security-relevant. Give it its own commit,\n` +
+      `state the new Rekor log id in the message, and bump the plugin version.\n`,
   );
   return 2;
 }

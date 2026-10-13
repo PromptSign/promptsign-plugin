@@ -1,8 +1,10 @@
 # Pinned Sigstore trust root (a copy)
 
-`fulcio.pem` (the Fulcio CA certificate chain) and `rekor.pub` (the Rekor
-transparency log's public key) are what every signature this plugin checks is
-ultimately anchored to.
+`fulcio.pem` (the Fulcio CA certificate chain), `rekor.pub` (the Rekor
+transparency log's public key) and `trusted_root.json` (Sigstore's public trust
+root document, which adds the Rekor v2 log and the timestamp authority) anchor
+every signature this plugin checks. A verifier on promptsign-core 0.5.0 or
+later joins the three into one root; an older one reads the first two.
 
 **This directory is a copy. It is not where the root is maintained.** The
 canonical copy lives in
@@ -31,7 +33,7 @@ private trust root is never silently overridden by the copy shipped here.
 
 ## Staying in step
 
-`scripts/check-trust-root.mjs` compares these two files against the canonical
+`scripts/check-trust-root.mjs` compares these files against the canonical
 ones and fails when they diverge. It runs in CI on every push and pull request,
 so an edit made here turns the build red, and weekly on a schedule, so a
 rotation landing in core is noticed even in a quiet week.
@@ -63,9 +65,13 @@ Then bring the result across:
 base=https://raw.githubusercontent.com/PromptSign/promptsign-core/main/trust
 curl -fsSL "$base/fulcio.pem" -o trust/fulcio.pem
 curl -fsSL "$base/rekor.pub"  -o trust/rekor.pub
+curl -fsSL "$base/trusted_root.json" -o trust/trusted_root.json
 node scripts/check-trust-root.mjs   # confirm, and update the log id above
 ```
 
-A change to either file is a security-relevant change to this plugin: it must be
-its own commit, with the new log id stated in the message, and it must bump the
-plugin version.
+promptsign-core replaces `trusted_root.json` whole when Sigstore publishes a new
+one through TUF, so copy it across the same way.
+
+A change to any of these files is a security-relevant change to this plugin: it
+must be its own commit, with the new log id stated in the message, and it must
+bump the plugin version.
