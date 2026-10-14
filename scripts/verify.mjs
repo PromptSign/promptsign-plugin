@@ -4,7 +4,7 @@
 //
 //   SessionStart      verify-tree over the project and user instruction dirs.
 //                     Failures are reported into session context, and are
-//                     non-blocking unless PROMPTSIGN_STRICT=1.
+//                     non-blocking unless strict mode is on.
 //   PreToolUse(Skill) locate the invoked skill's directory and verify it,
 //                     through the nearest enclosing bundle (a PromptSign
 //                     bundle or an OMS signature) when the skill was signed
@@ -12,9 +12,13 @@
 //                     call and feeds the reason back to the model.
 //
 // The mod (hooks/register.ts) runs sandboxed and reaches the verifier only by
-// running this script: a PreToolUse payload for a skill, or
+// running this script: a PreToolUse payload for a skill,
 // `verify.mjs verdict <path>...` for instruction files and plugin roots, which
-// prints one verdict per path as a JSON array.
+// prints `{ strict, verdicts }` with one verdict per path, and
+// `verify.mjs strict`, which prints whether strict mode is on.
+//
+// On the napi path this script appends each decision to the decision log the
+// managed or the user policy turns on (spec/08). The binary writes its own.
 //
 // Caveat, by design: skill frontmatter *descriptions* enter model context at
 // session start, before PreToolUse can fire. SessionStart and install-time
@@ -23,6 +27,8 @@
 // Config via env:
 //   PROMPTSIGN_STRICT=1     fail closed: unresolvable skills are blocked, and
 //                           SessionStart failures end the session with exit 2.
+//                           `strict: true` in the managed or the user policy
+//                           does the same.
 //   PROMPTSIGN_BIN          explicit path to the promptsign binary.
 //   PROMPTSIGN_NAPI         explicit path to a tier-2 module, in place of the
 //                           installed @promptsign/verify. Used by the tests.
@@ -36,16 +42,16 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   PLUGIN_ROOT,
-  STRICT,
   applyTrustEnv,
   binaryName,
   formatResult,
   formatTreeReport,
   loadNapi,
+  strictMode,
 } from './runtime.mjs';
 
 const stdinRaw = (() => {
-  if (process.argv[2] === 'verdict') return '';
+  if (process.argv[2] === 'verdict' || process.argv[2] === 'strict') return '';
   try {
     return fs.readFileSync(0, 'utf8');
   } catch {
@@ -66,36 +72,73 @@ const projectDir = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
 applyTrustEnv();
 
-// One path's VerifyResult, from the binary when it answers and from the napi
-// binding otherwise. Null when this machine has neither.
+// Appends what this script decided to the decision logs the managed and the
+// user policy turn on (spec/08), through the napi binding. A failed write is
+// reported and changes nothing else.
+function logDecisions(napi, logEvent, entries) {
+  if (!napi?.logDecisions || entries.length === 0) return;
+  try {
+    for (const e of napi.logDecisions({ harness: 'claude', event: logEvent, entries })) {
+      process.stderr.write(`PromptSign: ${e}\n`);
+    }
+  } catch (e) {
+    process.stderr.write(`PromptSign: decision log: ${e.message}\n`);
+  }
+}
+
+const decision = (blocked) => (blocked ? 'block' : 'allow');
+
+// One path's VerifyResult and the napi binding that produced it: the binary
+// when it answers (napi null), the binding otherwise. Null when this machine
+// has neither.
 function verifyPath(target) {
   const bin = spawnSync(binaryName(), ['verify', '--json', target], { encoding: 'utf8' });
   if (!bin.error && (bin.status === 0 || bin.status === 2)) {
     try {
-      return JSON.parse(bin.stdout);
+      return { result: JSON.parse(bin.stdout), napi: null };
     } catch {
       // Not the JSON this script expects from `verify`, so not our binary.
     }
   }
   const napi = loadNapi();
-  return napi ? napi.verify(target) : null;
+  return napi ? { result: napi.verify(target), napi } : null;
 }
 
-// `verify.mjs verdict <path>...`: { path, action, report } per path, action
-// being the verifier's own, 'none' with no verifier, or 'error' when the
-// verifier broke on that path.
+// `verify.mjs strict`: whether hooks fail closed, for the mod to read when
+// the verifier itself failed.
+if (process.argv[2] === 'strict') {
+  process.stdout.write(`${strictMode()}\n`);
+  process.exit(0);
+}
+
+// `verify.mjs verdict <path>...`: { strict, verdicts }, a { path, action,
+// report } per path, action being the verifier's own, 'none' with no
+// verifier, or 'error' when the verifier broke on that path. The mod withholds
+// a path that fails, and under strict mode one with no verdict; the script logs
+// that decision. PROMPTSIGN_MOD_EVENT names the mod event that asked.
 if (process.argv[2] === 'verdict') {
+  const strict = strictMode();
+  const logEvent = process.env.PROMPTSIGN_MOD_EVENT || 'verdict';
+  const napi = loadNapi();
+  const entries = [];
   const verdicts = process.argv.slice(3).map((target) => {
     try {
-      const r = verifyPath(target);
-      return r
-        ? { path: target, action: r.action, report: formatResult(r) }
-        : { path: target, action: 'none', report: 'no verifier available' };
+      const found = verifyPath(target);
+      if (!found) return { path: target, action: 'none', report: 'no verifier available' };
+      if (found.napi) {
+        entries.push({ result: found.result, decision: decision(found.result.action === 'fail') });
+      }
+      return { path: target, action: found.result.action, report: formatResult(found.result) };
     } catch (e) {
+      entries.push({
+        error: { name: path.basename(target), target, message: e.message },
+        decision: decision(strict),
+      });
       return { path: target, action: 'error', report: e.message };
     }
   });
-  process.stdout.write(`${JSON.stringify(verdicts)}\n`);
+  logDecisions(napi, logEvent, entries);
+  process.stdout.write(`${JSON.stringify({ strict, verdicts })}\n`);
   process.exit(0);
 }
 
@@ -127,9 +170,9 @@ if (!napi) {
   // Tier 3: no verifier on this machine. Say so once, at session start, where
   // the user will actually read it, and never block on it unless asked to.
   if (event === 'SessionStart') {
-    if (STRICT) {
+    if (strictMode()) {
       block(
-        'no verifier available (PROMPTSIGN_STRICT=1). Install the CLI from ' +
+        'no verifier available (strict mode). Install the CLI from ' +
           'https://promptsign.ai, or run /promptsign:setup to install @promptsign/verify.',
       );
     }
@@ -444,9 +487,13 @@ function preToolUse() {
 
   const skill = resolveSkillDir(String(skillName));
   if (!skill) {
-    if (STRICT) {
-      block(`could not locate skill "${skillName}" on disk to verify it (strict mode)`);
-    }
+    const strict = strictMode();
+    const message = `could not locate skill "${skillName}" on disk to verify it`;
+
+    logDecisions(napi, event, [
+      { unresolved: { name: String(skillName), message }, decision: decision(strict) },
+    ]);
+    if (strict) block(`${message} (strict mode)`);
     process.exit(0);
   }
 
@@ -456,7 +503,15 @@ function preToolUse() {
     result = napi.verify(root);
   } catch (e) {
     // The verifier itself broke, so fail closed only in strict mode.
-    if (STRICT) block(`verifier error for "${skillName}": ${e.message}`);
+    const strict = strictMode();
+
+    logDecisions(napi, event, [
+      {
+        error: { name: String(skillName), target: root, message: `verifier error: ${e.message}` },
+        decision: decision(strict),
+      },
+    ]);
+    if (strict) block(`verifier error for "${skillName}": ${e.message}`);
     process.exit(0);
   }
 
@@ -467,6 +522,7 @@ function preToolUse() {
     escalate(result, problem.level);
   }
 
+  logDecisions(napi, event, [{ result, decision: decision(result.action === 'fail') }]);
   if (result.action === 'fail') {
     const signedAs = root === skill.dir ? '' : ` (signed as part of ${root})`;
     block(
@@ -490,14 +546,26 @@ function sessionStart() {
   let results;
   try {
     results = napi.verifyTree(roots);
-  } catch {
-    process.exit(0); // verifier error never blocks session start
+  } catch (e) {
+    // A verifier error never blocks session start.
+    logDecisions(napi, event, [
+      { error: { message: `verifier error: ${e.message}` }, decision: 'allow' },
+    ]);
+    process.exit(0);
   }
 
-  if (!results.some((r) => r.action === 'fail')) process.exit(0);
+  const failed = results.some((r) => r.action === 'fail');
+  const strict = failed && strictMode();
+
+  logDecisions(
+    napi,
+    event,
+    results.map((result) => ({ result, decision: decision(strict) })),
+  );
+  if (!failed) process.exit(0);
 
   const report = formatTreeReport(results).trim();
-  if (STRICT) block(`instruction files failed signature verification:\n${report}`);
+  if (strict) block(`instruction files failed signature verification:\n${report}`);
 
   // Non-strict: surface the failures as session context so both the user and
   // the model see exactly which instruction files are untrusted.

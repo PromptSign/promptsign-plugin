@@ -16,9 +16,10 @@ neither, the hooks report that nothing is being verified and stop.
 node "${CLAUDE_PLUGIN_ROOT}/scripts/setup.mjs"
 ```
 
-Show the user the output as-is. It names the active verifier, the trust root in
-effect, every trust root a signature may chain to, and whether strict mode is
-on.
+Show the user the output as-is. It names the active verifier, whether strict
+mode is on and what turned it on, the policy files in effect (the machine's
+managed policy, the user's, the project's), the trust root in effect and why,
+and every trust root a signature may chain to.
 
 ## Trusting a publisher's own CA
 
@@ -67,10 +68,14 @@ Re-run the status command afterwards to confirm.
 
 ## Notes
 
-- `PROMPTSIGN_STRICT=1` makes failures fail closed instead of warning: a
-  SessionStart failure ends the session, and a skill that cannot be located on
-  disk, or whose verifier errors out, is blocked. It does not change unsigned
-  files, which stay warn-only unless a policy rule says `enforce`.
+- Strict mode makes failures fail closed instead of warning: a SessionStart
+  failure ends the session, and a skill that cannot be located on disk, or whose
+  verifier errors out, is blocked. `PROMPTSIGN_STRICT=1` turns it on, and so does
+  `"strict": true` in the user's policy or the machine's managed policy. It does
+  not change unsigned files, which stay warn-only unless a policy rule says
+  `enforce`.
+- A policy line marked `managed` comes from an administrator. The user cannot
+  loosen it, so do not suggest editing or deleting it.
 - The plugin ships a pinned Sigstore trust root in `trust/`. It is used only when
   the machine has no `PROMPTSIGN_TRUST_DIR` and no `PROMPTSIGN_HOME` of its own,
   so an enterprise private trust root is never silently overridden.

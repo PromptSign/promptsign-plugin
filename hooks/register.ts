@@ -13,9 +13,11 @@
 //                    plugin directory; a plugin that fails is refused.
 //
 // Unsigned is not a failure: the trust policy decides what unsigned means, as
-// it does for the hooks. PROMPTSIGN_STRICT=1 adds that a broken or missing
-// verifier withholds instead of letting content through, which is what each
-// hook's .catch is for: a hook that throws or overruns is otherwise skipped.
+// it does for the hooks. Strict mode adds that a broken or missing verifier
+// withholds instead of letting content through, which is what each hook's
+// .catch is for: a hook that throws or overruns is otherwise skipped. Strict
+// mode comes from PROMPTSIGN_STRICT=1 or from `strict: true` in the managed or
+// the user policy, which only the verifier can read.
 //
 // The hooks stay. Mods do not run under `claude -p` or --safe-mode, and other
 // harnesses only have the hooks.
@@ -32,25 +34,36 @@ type Verdict = {
   report: string
 }
 
-async function isStrict($: EngineInterface) {
-  return (await $.env.get('PROMPTSIGN_STRICT')) === '1'
-}
-
-function runVerifier($: EngineInterface, args: readonly string[], stdin = '') {
+function runVerifier($: EngineInterface, args: readonly string[], stdin = '', event = '') {
   return $.process.run(['node', `${$.plugin.root}/scripts/verify.mjs`, ...args], {
     stdin,
-    env: { CLAUDE_PLUGIN_ROOT: $.plugin.root },
+    env: { CLAUDE_PLUGIN_ROOT: $.plugin.root, PROMPTSIGN_MOD_EVENT: event },
     timeoutMs: 30_000,
   })
 }
 
-async function verdicts($: EngineInterface, paths: readonly string[]) {
-  const run = await runVerifier($, ['verdict', ...paths])
+// Strict mode for when the verifier gave no verdict: PROMPTSIGN_STRICT=1, else
+// the verifier's answer (it reads the policies), else off.
+async function isStrict($: EngineInterface) {
+  if ((await $.env.get('PROMPTSIGN_STRICT')) === '1') return true
+  try {
+    const run = await runVerifier($, ['strict'])
+
+    return run.exitCode === 0 && run.stdout.trim() === 'true'
+  } catch {
+    return false
+  }
+}
+
+// One verdict per path, and whether strict mode is on, from one verifier run.
+// `event` names the mod event in the decision log.
+async function verdicts($: EngineInterface, paths: readonly string[], event: string) {
+  const run = await runVerifier($, ['verdict', ...paths], '', event)
 
   if (run.exitCode !== 0) {
     throw new Error(`verifier exited ${run.exitCode}: ${run.stderr.trim()}`)
   }
-  return JSON.parse(run.stdout) as Verdict[]
+  return JSON.parse(run.stdout) as { strict: boolean; verdicts: Verdict[] }
 }
 
 // Whether a verdict keeps its content from the model: a failed verification
@@ -105,8 +118,11 @@ export const register: Register = on => {
 
     if (files.length === 0) return next(e)
 
-    const strict = await isStrict($)
-    const found = await verdicts($, [...new Set(files.map(file => file.path))])
+    const { strict, verdicts: found } = await verdicts(
+      $,
+      [...new Set(files.map(file => file.path))],
+      'prompt.context',
+    )
     const byPath = new Map(found.map(verdict => [verdict.path, verdict]))
     const withheld = (file: InstructionFile) =>
       file.kind !== 'managed' && isWithheld(byPath.get(file.path), strict)
@@ -138,9 +154,9 @@ export const register: Register = on => {
   })
 
   on('plugin.register', { tier: 'user' }, async ($, e, next) => {
-    const [verdict] = await verdicts($, [e.root])
+    const { strict, verdicts: [verdict] } = await verdicts($, [e.root], 'plugin.register')
 
-    if (isWithheld(verdict, await isStrict($))) {
+    if (isWithheld(verdict, strict)) {
       $.ui.toast(`PromptSign refused the plugin ${e.name}`)
       return { refuse: `PromptSign: ${e.name} failed signature verification.\n${verdict?.report ?? ''}`.trim() }
     }

@@ -61,8 +61,27 @@ module.exports = {
   verify: (t) => result(t),
   verifyTree: (roots) => roots.map(result),
   coreVersion: () => '0.0.0-stub',
+  // The policy's strict setting, as the real binding reads it.
+  strictMode: () => process.env.PROMPTSIGN_TEST_STRICT === '1',
+  // Appends each call to PROMPTSIGN_TEST_LOG, one JSON line per call.
+  logDecisions: (input) => {
+    if (process.env.PROMPTSIGN_TEST_LOG) {
+      fs.appendFileSync(process.env.PROMPTSIGN_TEST_LOG, JSON.stringify(input) + '\\n');
+    }
+    return [];
+  },
 };
 `;
+
+// The logDecisions calls a run made, from the stub's log file.
+function logged(file) {
+  if (!fs.existsSync(file)) return [];
+  return fs
+    .readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+}
 
 function runHook(payload, env = {}) {
   const r = spawnSync(process.execPath, [HOOK], {
@@ -164,6 +183,42 @@ describe('PreToolUse', () => {
     );
     assert.equal(strict.status, 2);
     assert.match(strict.stderr, /could not locate skill/);
+  });
+
+  test('a strict policy blocks an unresolvable skill without the variable', () => {
+    const r = runHook(
+      { hook_event_name: 'PreToolUse', tool_name: 'Skill', tool_input: { skill: 'nonexistent' } },
+      { ...env(), PROMPTSIGN_STRICT: '', PROMPTSIGN_TEST_STRICT: '1' },
+    );
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /could not locate skill "nonexistent" on disk to verify it \(strict mode\)/);
+  });
+
+  test('logs each decision through the binding', () => {
+    const log = path.join(tmp, 'pre-tool-use.log');
+    const call = (skill) =>
+      runHook(
+        { hook_event_name: 'PreToolUse', tool_name: 'Skill', tool_input: { skill } },
+        { ...env(), PROMPTSIGN_STRICT: '', PROMPTSIGN_TEST_LOG: log },
+      );
+
+    assert.equal(call('demo').status, 2);
+    assert.equal(call('nonexistent').status, 0);
+
+    const [blocked, unresolved] = logged(log);
+    assert.equal(blocked.harness, 'claude');
+    assert.equal(blocked.event, 'PreToolUse');
+    assert.equal(blocked.entries[0].decision, 'block');
+    assert.equal(blocked.entries[0].result.action, 'fail');
+    assert.deepEqual(unresolved.entries, [
+      {
+        unresolved: {
+          name: 'nonexistent',
+          message: 'could not locate skill "nonexistent" on disk to verify it',
+        },
+        decision: 'allow',
+      },
+    ]);
   });
 
   test('a broken verifier is allowed by default and blocked under strict', () => {
@@ -545,7 +600,8 @@ describe('verdict mode', () => {
       encoding: 'utf8',
       env: { ...process.env, CLAUDE_PLUGIN_ROOT: ROOT, PROMPTSIGN_HOME: tmp, ...env },
     });
-    return { status: r.status, verdicts: JSON.parse(r.stdout || 'null') };
+    const out = JSON.parse(r.stdout || 'null');
+    return { status: r.status, strict: out?.strict, verdicts: out?.verdicts };
   };
 
   test('prints one verdict per path from the napi verifier', () => {
@@ -564,6 +620,36 @@ describe('verdict mode', () => {
       ],
     );
     assert.match(r.verdicts[0].report, /stub says no/);
+  });
+
+  test('reports strict mode and logs under the mod event that asked', () => {
+    const log = path.join(tmp, 'verdict.log');
+    const r = verdict([tmp], {
+      PROMPTSIGN_BIN: NO_BINARY,
+      PROMPTSIGN_NAPI: stub,
+      PROMPTSIGN_STRICT: '',
+      PROMPTSIGN_TEST_STRICT: '1',
+      PROMPTSIGN_TEST_ACTION: 'fail',
+      PROMPTSIGN_TEST_LOG: log,
+      PROMPTSIGN_MOD_EVENT: 'plugin.register',
+    });
+    assert.equal(r.strict, true);
+
+    const [call] = logged(log);
+    assert.equal(call.event, 'plugin.register');
+    assert.equal(call.entries[0].decision, 'block');
+  });
+
+  test('`verify.mjs strict` prints whether hooks fail closed', () => {
+    const strict = (env) =>
+      spawnSync(process.execPath, [HOOK, 'strict'], {
+        encoding: 'utf8',
+        env: { ...process.env, PROMPTSIGN_STRICT: '', PROMPTSIGN_BIN: NO_BINARY, PROMPTSIGN_NAPI: stub, ...env },
+      }).stdout.trim();
+
+    assert.equal(strict({}), 'false');
+    assert.equal(strict({ PROMPTSIGN_TEST_STRICT: '1' }), 'true');
+    assert.equal(strict({ PROMPTSIGN_STRICT: '1' }), 'true');
   });
 
   test('says so when no verifier is available', () => {
@@ -590,6 +676,26 @@ describe('SessionStart', () => {
     );
     assert.equal(r.status, 0);
     assert.match(r.stdout, /FAILED verification/);
+  });
+
+  test('logs every result under one decision', () => {
+    const log = path.join(tmp, 'session.log');
+    const r = runHook(
+      { hook_event_name: 'SessionStart', cwd: tmp },
+      {
+        PROMPTSIGN_BIN: NO_BINARY,
+        PROMPTSIGN_TEST_ACTION: 'fail',
+        PROMPTSIGN_STRICT: '',
+        PROMPTSIGN_TEST_STRICT: '1',
+        PROMPTSIGN_TEST_LOG: log,
+      },
+    );
+    assert.equal(r.status, 2);
+
+    const [call] = logged(log);
+    assert.equal(call.event, 'SessionStart');
+    assert.ok(call.entries.length > 0);
+    assert.ok(call.entries.every((e) => e.decision === 'block'));
   });
 
   test('blocks under strict', () => {

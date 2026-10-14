@@ -34,16 +34,17 @@ function verifier(on: On, answer: (argv: readonly string[], stdin: string) => Ru
 }
 
 // A `verify.mjs verdict` answer: each path's action from `actions`, else warn.
-function verdictsOf(actions: Record<string, string>) {
+function verdictsOf(actions: Record<string, string>, strict = false) {
   return (argv: readonly string[]): Run => ({
     exitCode: 0,
-    stdout: JSON.stringify(
-      argv.slice(argv.indexOf('verdict') + 1).map(path => ({
+    stdout: JSON.stringify({
+      strict,
+      verdicts: argv.slice(argv.indexOf('verdict') + 1).map(path => ({
         path,
         action: actions[path] ?? 'warn',
         report: `${(actions[path] ?? 'warn').toUpperCase()}  ${path}`,
       })),
-    ),
+    }),
   })
 }
 
@@ -99,6 +100,31 @@ describe('register', () => {
 
     expect(text).toContain('PromptSign withheld the skill "demo:hello"')
     expect(text).toContain('The verifier failed')
+  })
+
+  test('a strict policy the verifier reports withholds the skill when it breaks', async ($, on) => {
+    on('skill.prompt', ($, e) => ({ text: e.text }))
+    verifier(on, argv =>
+      argv.includes('strict')
+        ? { exitCode: 0, stdout: 'true\n' }
+        : { exitCode: 1, stderr: 'verifier crashed' },
+    )
+    mock.env(on, {})
+
+    const { text } = await $.skill.prompt(SKILL)
+
+    expect(text).toContain('PromptSign withheld the skill "demo:hello"')
+  })
+
+  test('a CLAUDE.md with no verdict is withheld when the verifier says strict', async ($, on) => {
+    mock.env(on, {})
+    on('prompt.context', ($, e) => ({ blocks: e.blocks, instructionFiles: e.instructionFiles }))
+    verifier(on, verdictsOf({ '/repo/CLAUDE.md': 'none' }, true))
+
+    const files = [{ path: '/repo/CLAUDE.md', kind: 'project' as const, content: 'plain' }]
+    const context = await $.prompt.context({ blocks: [], instructionFiles: files })
+
+    expect(context.instructionFiles?.[0]?.content).toContain('PromptSign withheld /repo/CLAUDE.md')
   })
 
   test('a CLAUDE.md that fails verification is replaced by a notice', async ($, on) => {

@@ -20,6 +20,7 @@
 // promptsign.ai, and the napi package is installed from npm at plugin-install
 // time rather than committed.
 
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -33,9 +34,46 @@ export const PLUGIN_ROOT =
   process.env.CLAUDE_PLUGIN_ROOT ||
   path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-/** Fail closed: unresolvable skills and verification failures block. Default is
- *  fail-open with warnings, because most of the ecosystem is still unsigned. */
-export const STRICT = process.env.PROMPTSIGN_STRICT === '1';
+let strict;
+
+/** Whether hooks fail closed, and why: `{ on, why }`. Strict mode makes
+ *  unresolvable skills and verifier failures block. PROMPTSIGN_STRICT=1 turns
+ *  it on, and so does `strict: true` in the machine's managed policy or the
+ *  user's policy (spec/04), which only the verifier can read: the napi binding
+ *  when installed, else the binary's `policy show`. Off by default, because
+ *  most of the ecosystem is still unsigned. */
+export function strictState() {
+  if (strict) return strict;
+  if (process.env.PROMPTSIGN_STRICT === '1') {
+    strict = { on: true, why: 'PROMPTSIGN_STRICT=1' };
+    return strict;
+  }
+
+  const napi = loadNapi();
+
+  if (napi?.strictMode) {
+    let on = false;
+
+    try {
+      on = napi.strictMode();
+    } catch {
+      // A verifier that cannot read the policy cannot say it is strict.
+    }
+    strict = { on, why: on ? 'managed or user policy' : null };
+    return strict;
+  }
+
+  const shown = spawnSync(binaryName(), ['policy', 'show'], { encoding: 'utf8' });
+  const line = shown.status === 0 ? /^# strict: on \((.+)\)$/m.exec(shown.stdout ?? '') : null;
+
+  strict = { on: Boolean(line), why: line ? line[1] : null };
+  return strict;
+}
+
+/** True when hooks fail closed (see strictState). */
+export function strictMode() {
+  return strictState().on;
+}
 
 /** The Sigstore roots this plugin pins, shipped as files in trust/ so that a
  *  fresh install verifies offline without a `promptsign trust fetch` first.
@@ -60,7 +98,9 @@ export function binaryName() {
 }
 
 /** Tier 2, or null if it was never installed. Returns the module's public
- *  surface: { verify, verifyTree, verifyKeyless, policyShow, coreVersion }.
+ *  surface: verify, verifyTree, verifyKeyless, policyShow, policyLayers,
+ *  strictMode, trustRoot, trustRoots, logDecisions and coreVersion. Versions
+ *  before 0.7.0 lack the last few, so callers check before using them.
  *
  *  PROMPTSIGN_NAPI names a module file to load instead of the installed
  *  package, mirroring what PROMPTSIGN_BIN does for tier 1. The tests use it to

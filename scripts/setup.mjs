@@ -13,7 +13,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { PLUGIN_ROOT, STRICT, applyTrustEnv, binaryName, loadNapi } from './runtime.mjs';
+import { PLUGIN_ROOT, applyTrustEnv, binaryName, loadNapi, strictState } from './runtime.mjs';
 
 const wantInstall = process.argv.includes('--install');
 const out = [];
@@ -50,9 +50,13 @@ if (wantInstall) {
 const bin = probeBinary();
 const napi = loadNapi();
 
+const strict = strictState();
+
 out.push('PromptSign plugin status');
 out.push(`  plugin root : ${PLUGIN_ROOT}`);
-out.push(`  strict mode : ${STRICT ? 'on (failures block)' : 'off (failures warn)'}`);
+out.push(
+  `  strict mode : ${strict.on ? `on (failures block; set by ${strict.why})` : 'off (failures warn)'}`,
+);
 
 if (bin && bin.status === 0) {
   out.push(`  verifier    : ${binaryName()} binary (tier 1: in-process, no Node startup)`);
@@ -62,9 +66,54 @@ if (bin && bin.status === 0) {
   out.push('  verifier    : NONE. Nothing is being verified.');
 }
 
-const trustDir = process.env.PROMPTSIGN_TRUST_DIR || '(promptsign default: ~/.promptsign/trust)';
+// The policy layers in evaluation order: the machine's managed policy, the
+// user's, the project's. Later ones can only tighten the first (spec/04).
+function policyLayers() {
+  const dir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+
+  if (napi?.policyLayers) {
+    try {
+      return napi.policyLayers(dir).map((l) => `${l.layer}  ${l.source}`);
+    } catch (e) {
+      return [`(could not read the policies: ${e.message})`];
+    }
+  }
+  if (bin && bin.status === 0) {
+    const r = spawnSync(binaryName(), ['policy', 'show'], { encoding: 'utf8', cwd: dir });
+    const headers = (r.stdout || '').split('\n').filter((l) => /^# .*polic/.test(l));
+
+    if (r.status === 0) return headers.map((l) => l.replace(/^# /, ''));
+  }
+  return null;
+}
+
+const layers = policyLayers();
+
+if (layers) out.push(`  policies    : ${layers.join('\n                ')}`);
+
+// The trust root keyless verification uses, and the reason. The napi binding
+// accounts for the managed layer; without it, the environment decides.
 const pinned = path.join(PLUGIN_ROOT, 'trust');
-out.push(`  trust root  : ${trustDir}${trustDir === pinned ? ' (pinned, shipped with the plugin)' : ''}`);
+
+if (napi?.trustRoot) {
+  const { dir, source } = napi.trustRoot();
+  const why = {
+    managed: "the machine's managed trust directory",
+    lock_env: 'the managed policy sets lock_env, so the environment is ignored',
+    PROMPTSIGN_TRUST_DIR: 'PROMPTSIGN_TRUST_DIR',
+    PROMPTSIGN_HOME: 'PROMPTSIGN_HOME',
+    bundled: 'shipped with @promptsign/verify',
+    'promptsign-home-default': 'promptsign default',
+  }[source];
+
+  out.push(
+    `  trust root  : ${dir} (${dir === pinned ? 'pinned, shipped with the plugin' : (why ?? source)})`,
+  );
+} else {
+  const trustDir = process.env.PROMPTSIGN_TRUST_DIR || '(promptsign default: ~/.promptsign/trust)';
+
+  out.push(`  trust root  : ${trustDir}${trustDir === pinned ? ' (pinned, shipped with the plugin)' : ''}`);
+}
 if (bin && bin.status === 0) out.push(`  ${bin.output.split('\n').join('\n  ')}`);
 else if (!fs.existsSync(path.join(pinned, 'fulcio.pem'))) {
   out.push('  WARNING: no pinned trust root in the plugin. Run `promptsign trust fetch`.');
