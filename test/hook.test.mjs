@@ -122,6 +122,27 @@ after(() => {
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+describe('formatResult', () => {
+  test('names the approvers of an approved unsigned skill', async () => {
+    const { formatResult } = await import('../scripts/runtime.mjs');
+    const out = formatResult({
+      action: 'pass',
+      name: 'triage',
+      signed: false,
+      findings: [],
+      approvals: [
+        { identity: 'alice@acme.test', issuer: 'https://sso.acme.test', root: 'acme/prod' },
+        { identity: 'bob@acme.test', issuer: 'https://sso.acme.test', root: 'sigstore-public' },
+      ],
+    });
+
+    assert.equal(
+      out,
+      'PASS  triage  unsigned\n    approved by alice@acme.test (root acme/prod), bob@acme.test',
+    );
+  });
+});
+
 describe('runtime tiering', () => {
   test('an unusable binary falls through to the napi verifier', () => {
     const r = runHook(

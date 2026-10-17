@@ -128,10 +128,15 @@ export function formatResult(r) {
   const signer = !r.signed ? '  unsigned' : r.identity ? `  signer: ${r.identity}` : '  signature not verified';
   const via = [r.format === 'oms' ? 'OMS signature' : null, r.root ? `root ${r.root}` : null].filter(Boolean);
   const who = via.length ? `${signer} (${via.join(', ')})` : signer;
+  // Approvals of the exact bytes (spec/09) that a policy rule asked for.
+  const approvers = (r.approvals || []).map((a) =>
+    a.root && a.root !== 'sigstore-public' ? `${a.identity} (root ${a.root})` : a.identity,
+  );
+  const approved = approvers.length ? [`    approved by ${approvers.join(', ')}`] : [];
   const findings = (r.findings || [])
     .filter((f) => f.level !== 'info')
     .map((f) => `    - ${f.level}: ${f.message}`);
-  return [head + who, ...findings].join('\n');
+  return [head + who, ...approved, ...findings].join('\n');
 }
 
 /** The failing part of a verify-tree run, or '' when everything passed. */
