@@ -40,6 +40,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { autoSignEnabled, resignChangedSkills } from './autosign.mjs';
 import {
   PLUGIN_ROOT,
   applyTrustEnv,
@@ -153,6 +154,14 @@ function block(reason) {
 // other code means this binary does not speak `hook` (wrong version, or a
 // different program of the same name). Fall through rather than trusting it.
 // ---------------------------------------------------------------------------
+// With auto-signing on, the plugin re-signs the user's changed skills before
+// the session's verification reads them (scripts/autosign.mjs).
+if (event === 'SessionStart' && autoSignEnabled()) {
+  const lines = resignChangedSkills(projectDir);
+
+  if (lines.length) process.stdout.write(`${lines.join('\n')}\n`);
+}
+
 const viaBin = spawnSync(binaryName(), ['hook'], { input: stdinRaw, encoding: 'utf8' });
 
 if (!viaBin.error && (viaBin.status === 0 || viaBin.status === 2)) {

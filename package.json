@@ -14,7 +14,7 @@
   "scripts": {
     "status": "node scripts/setup.mjs",
     "setup": "node scripts/setup.mjs --install",
-    "test": "node --test test/hook.test.mjs test/napi.test.mjs",
+    "test": "node --test test/hook.test.mjs test/napi.test.mjs test/autosign.test.mjs",
     "test:mod": "claude plugin test .",
     "check-trust-root": "node scripts/check-trust-root.mjs",
     "validate": "claude plugin validate . --strict && claude plugin validate ./.claude-plugin/plugin.json --strict"

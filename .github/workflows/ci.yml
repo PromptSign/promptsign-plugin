@@ -26,7 +26,7 @@ jobs:
       # Nothing is installed here on purpose, which is what a fresh clone and a
       # `claude --plugin-dir` checkout both look like. The napi suite skips
       # itself in that state, and the job below is the one that runs it.
-      - run: node --test test/hook.test.mjs test/napi.test.mjs
+      - run: node --test test/hook.test.mjs test/napi.test.mjs test/autosign.test.mjs
 
   # The suite above drives tier 2 through a stub, so on its own it never loads
   # the addon that actually ships. This job installs the real @promptsign/verify
@@ -52,7 +52,7 @@ jobs:
       - name: the addon must be loadable
         run: node -e "const v=require('@promptsign/verify'); console.log('core', v.coreVersion())"
 
-      - run: node --test test/hook.test.mjs test/napi.test.mjs
+      - run: node --test test/hook.test.mjs test/napi.test.mjs test/autosign.test.mjs
 
   manifests:
     runs-on: ubuntu-latest

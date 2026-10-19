@@ -49,6 +49,7 @@ It reports whether a verifier is present and how to get one if not. See
 |---|---|---|
 | `SessionStart` | before work starts | verify-tree over the project, `CLAUDE.md`/`AGENTS.md`, and `~/.claude`; failures are injected into session context |
 | `PreToolUse` (`Skill`) | before a skill runs | re-verify that skill's signature, or the plugin's when the skill was signed as part of one; a failure exits 2, which blocks the call and tells the model why |
+| `PostToolUse` (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`) | after Claude writes a file | with [auto-signing](#auto-signing) on, sign the skill the file belongs to as you; otherwise nothing |
 
 Fail-open by default: most of the ecosystem is unsigned today, and you would
 uninstall a plugin that blocked every unsigned file within an hour. Blocking
@@ -65,6 +66,35 @@ managed policy. The environment cannot turn off a managed `strict`.
 > **Caveat, by design:** skill frontmatter *descriptions* enter model context at
 > session start, before `PreToolUse` can fire. `SessionStart` and install-time
 > verification are the primary controls; `PreToolUse` is defense in depth.
+
+### Auto-signing
+
+Under a policy that enforces signatures, a skill you write runs only once you
+sign it, and every edit breaks the signature until you sign again. With
+`PROMPTSIGN_AUTO_SIGN=1` the plugin signs for you, as the identity you signed in
+with through `promptsign login`:
+
+- When Claude writes or edits a file inside a skill under `~/.claude/skills` or
+  `<project>/.claude/skills`, the plugin signs that skill after each write.
+- At session start, the plugin re-signs the skills under those folders that you
+  signed and then changed in an editor.
+
+The plugin signs with `promptsign sign --same-signer`, which refuses to replace
+a signature someone else made. A skill another person signed stays theirs: after
+an edit it fails verification until they sign it again, and the plugin tells you
+so. An unsigned skill gets a signature only when Claude writes to it, never at
+session start, so a skill that arrives unsigned in a clone or a download stays
+unsigned.
+
+Auto-signing needs the `promptsign` binary and a sign-in. With an
+organization's sign-in, the CLI renews it without a browser for as long as the
+organization allows; when it can no longer renew, the plugin asks you to run
+`promptsign login`. Each signature adds an entry to the transparency log of
+the Sigstore instance you sign with. On public Sigstore that entry, your email
+included, is public.
+
+An organization can turn auto-signing on for every user by setting
+`PROMPTSIGN_AUTO_SIGN` in the `env` block of Claude Code's managed settings.
 
 ### The mod: gating what Claude reads
 
@@ -152,7 +182,7 @@ This is the complete list.
 
 ### Runs
 
-Both hooks run `node ${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs`. The script:
+The `SessionStart` and `PreToolUse` hooks run `node ${CLAUDE_PLUGIN_ROOT}/scripts/verify.mjs`. The script:
 
 1. Reads the hook event from stdin.
 2. Uses the `promptsign` binary (`promptsign hook`) if it is on `PATH` or set in `PROMPTSIGN_BIN`.
@@ -166,6 +196,12 @@ plugin directories, which prints one verdict per path and whether strict mode
 is on. It reads one environment variable, `PROMPTSIGN_STRICT`, and makes no
 other calls besides on-screen notices.
 See "The mod: gating what Claude reads" for what it sends.
+
+The `PostToolUse` hook runs `node ${CLAUDE_PLUGIN_ROOT}/scripts/autosign.mjs`,
+which exits at once unless [auto-signing](#auto-signing) is on. When it is on,
+the hook and `verify.mjs` at session start run `promptsign verify --json
+--no-pin-updates <skill>` and `promptsign sign <skill> --same-signer` for the
+skills under the auto-sign folders.
 
 The `/promptsign:verify` skill runs `scripts/check.mjs` the same way.
 
@@ -217,7 +253,11 @@ verdict, what PromptSign did, and the policy rule that decided. The `promptsign`
 binary writes these lines itself; on the `@promptsign/verify` path the hook script
 writes them.
 
-The plugin writes nothing else, and it never writes into the files it verifies.
+With [auto-signing](#auto-signing) on, the `promptsign` binary writes each
+skill's signature, `<skill>/.promptsign/bundle.json`, and updates
+`~/.promptsign/session.json` when it renews your sign-in.
+
+The plugin writes nothing else, and it never changes the files it verifies.
 
 ### Fetches
 
@@ -229,6 +269,8 @@ Two plugin install steps reach the network. Both fetch exactly `@promptsign/veri
 * **`/promptsign:setup --install`:** The setup script runs `npm install --omit=dev --no-audit --no-fund` in the plugin directory.
 
 If you install the `promptsign` binary, it comes from https://promptsign.ai, not from this plugin. The binary fetches its revocation feed only when you run `promptsign revoke fetch`; the hooks use the cached copy.
+
+Signing reaches the network, and the plugin signs only with [auto-signing](#auto-signing) on. Then the `promptsign` binary sends each signature to the Sigstore services you sign with (the certificate authority, the transparency log, and a timestamp authority when one is configured) and renews your sign-in at your identity provider.
 
 ### Not part of the plugin at runtime
 
@@ -327,6 +369,8 @@ You configure the plugin through environment variables.
 | `PROMPTSIGN_TRUST_DIR` | Trust root other than the one pinned in `trust/`. |
 | `PROMPTSIGN_HOME` | PromptSign state directory (default `~/.promptsign`). Setting it stops the plugin from applying its pinned trust root. |
 | `PROMPTSIGN_POLICY` | Explicit trust policy path (see [Policy](#policy)). |
+| `PROMPTSIGN_AUTO_SIGN=1` | Sign the skills Claude writes, and re-sign your own changed skills at session start (see [Auto-signing](#auto-signing)). |
+| `PROMPTSIGN_AUTO_SIGN_ROOTS` | Skill folders to auto-sign under, path-delimiter separated, relative to the project. Default: `~/.claude/skills` and `<project>/.claude/skills`. |
 
 Enterprise: ship the plugin through managed settings so users cannot disable it,
 and set `"strict": true` in the machine's `managed-policy.json` (see
