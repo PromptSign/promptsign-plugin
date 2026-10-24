@@ -40,6 +40,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          check-latest: true
 
       # Exit 1 means core was unreachable and nothing was compared; exit 2 means
       # the roots genuinely differ. The script's output says which, because the

@@ -20,6 +20,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          check-latest: true
 
       # The hooks run on whatever Node the user has; the tests spawn the hook as
       # a subprocess, so this is the same code path a real session takes.
@@ -43,6 +44,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          check-latest: true
 
       - run: npm install
 
@@ -61,6 +63,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          check-latest: true
       - run: npm install -g @anthropic-ai/claude-code
       # --strict so unrecognized fields and missing metadata fail here rather
       # than at submission review.
