@@ -71,7 +71,7 @@ jobs:
           echo "version=$plugin" >> "$GITHUB_OUTPUT"
 
       - id: sign
-        uses: PromptSign/promptsign-sign@fb537fc40491c86e0fc58fcb0d4b05f6f0b2b216 # v1.0.5
+        uses: PromptSign/promptsign-sign@d5761bb09e27c2e1a014ae4729b20207493fa9d2 # v1.0.6
         with:
           path: .
           name: promptsign
@@ -98,7 +98,7 @@ jobs:
       # This runs before the commit rather than after it, so a signature that
       # does not verify never reaches main. Excluding .promptsign/ keeps the
       # tree checked here and the tree committed below identical.
-      - uses: PromptSign/promptsign-verify@d0eec9c41f105e66e4f36a33f969245d7870971d # v1.1.4
+      - uses: PromptSign/promptsign-verify@d717066d040dddfc92b5f4c87e9337d2096ef659 # v1.1.5
         with:
           path: .
           identity: https://github.com/PromptSign/promptsign-plugin/.github/workflows/sign.yml@refs/tags/promptsign--v*
@@ -135,7 +135,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: PromptSign/promptsign-verify@d0eec9c41f105e66e4f36a33f969245d7870971d # v1.1.4
+      - uses: PromptSign/promptsign-verify@d717066d040dddfc92b5f4c87e9337d2096ef659 # v1.1.5
         with:
           path: .
           identity: https://github.com/PromptSign/promptsign-plugin/.github/workflows/sign.yml@refs/tags/promptsign--v*
